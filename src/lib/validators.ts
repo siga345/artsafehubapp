@@ -57,8 +57,8 @@ export const budgetItemSchema = z.object({
   songId: z.string().min(1),
   category: z.string(),
   amount: z.number(),
-  currency: z.string().default(\"RUB\"),
-  note: z.string().default(\"\")
+  currency: z.string().default("RUB"),
+  note: z.string().default("")
 });
 
 export const assistantMessageSchema = z.object({
