@@ -43,8 +43,8 @@ export default function SongsPage() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Songs</CardTitle>
-          <CardDescription>Track every song as a process, not a file.</CardDescription>
+          <CardTitle>Песни</CardTitle>
+          <CardDescription>Отслеживай песню как процесс, а не как файл.</CardDescription>
         </CardHeader>
         <div className="max-w-xs">
           <Select value={filter} onChange={(event) => setFilter(event.target.value)}>
@@ -72,7 +72,7 @@ export default function SongsPage() {
             </Card>
           </Link>
         ))}
-        {filtered.length === 0 && <p className="text-sm text-brand-muted">No songs found.</p>}
+        {filtered.length === 0 && <p className="text-sm text-brand-muted">Песни не найдены.</p>}
       </div>
     </div>
   );

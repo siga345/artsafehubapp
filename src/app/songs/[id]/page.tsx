@@ -34,7 +34,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
   const [notes, setNotes] = useState("");
 
   if (!song) {
-    return <p className="text-sm text-brand-muted">Loading...</p>;
+    return <p className="text-sm text-brand-muted">Загрузка...</p>;
   }
 
   return (
@@ -59,8 +59,8 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Audio clips</CardTitle>
-          <CardDescription>Uploaded voice memos and sketches.</CardDescription>
+          <CardTitle>Аудио‑клипы</CardTitle>
+          <CardDescription>Загруженные войс‑мемо и скетчи.</CardDescription>
         </CardHeader>
         <div className="space-y-2 text-sm">
           {song.audioClips?.map((clip: any) => (
@@ -69,18 +69,18 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
               <p className="text-xs text-brand-muted">{clip.durationSec}s • {clip.noteText}</p>
             </div>
           ))}
-          {!song.audioClips?.length && <p className="text-brand-muted">No clips yet.</p>}
+          {!song.audioClips?.length && <p className="text-brand-muted">Пока нет клипов.</p>}
         </div>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Lyrics / Notes</CardTitle>
-          <CardDescription>Markdown editor for your working draft.</CardDescription>
+          <CardTitle>Текст / заметки</CardTitle>
+          <CardDescription>Markdown‑редактор для черновика.</CardDescription>
         </CardHeader>
         <Textarea
           rows={6}
-          placeholder="Write your draft here..."
+          placeholder="Пиши черновик здесь..."
           value={notes}
           onChange={(event) => setNotes(event.target.value)}
         />
@@ -88,8 +88,8 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Tasks</CardTitle>
-          <CardDescription>What needs to be done for this song.</CardDescription>
+          <CardTitle>Задачи</CardTitle>
+          <CardDescription>Что нужно сделать для этой песни.</CardDescription>
         </CardHeader>
         <div className="space-y-2 text-sm">
           {song.tasks?.map((task: any) => (
@@ -98,14 +98,14 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
               <p className="text-xs text-brand-muted">{task.status}</p>
             </div>
           ))}
-          {!song.tasks?.length && <p className="text-brand-muted">No tasks yet.</p>}
+          {!song.tasks?.length && <p className="text-brand-muted">Пока нет задач.</p>}
         </div>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Budget items</CardTitle>
-          <CardDescription>Track estimated spending.</CardDescription>
+          <CardTitle>Бюджет</CardTitle>
+          <CardDescription>Отслеживай плановые расходы.</CardDescription>
         </CardHeader>
         <div className="space-y-2 text-sm">
           {song.budgetItems?.map((item: any) => (
@@ -116,14 +116,14 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
               </p>
             </div>
           ))}
-          {!song.budgetItems?.length && <p className="text-brand-muted">No budget items yet.</p>}
+          {!song.budgetItems?.length && <p className="text-brand-muted">Пока нет статей бюджета.</p>}
         </div>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Members</CardTitle>
-          <CardDescription>People contributing to this song.</CardDescription>
+          <CardTitle>Участники</CardTitle>
+          <CardDescription>Люди, которые работают над песней.</CardDescription>
         </CardHeader>
         <div className="space-y-2 text-sm">
           {song.members?.map((member: any) => (
@@ -132,21 +132,21 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
               <p className="text-xs text-brand-muted">{member.role}</p>
             </div>
           ))}
-          {!song.members?.length && <p className="text-brand-muted">No members yet.</p>}
+          {!song.members?.length && <p className="text-brand-muted">Пока нет участников.</p>}
         </div>
       </Card>
 
       {song.status === "READY_FOR_RELEASE" && (
         <Card>
           <CardHeader>
-            <CardTitle>Release Gate Checklist</CardTitle>
-            <CardDescription>Confirm every release item before shipping.</CardDescription>
+          <CardTitle>Release Gate чек‑лист</CardTitle>
+          <CardDescription>Проверь все пункты перед релизом.</CardDescription>
           </CardHeader>
           <div className="space-y-2 text-sm text-slate-700">
-            <p>✅ Artwork prepared</p>
-            <p>✅ Mastered audio</p>
-            <p>✅ Metadata filled</p>
-            <Button variant="secondary">Mark as released</Button>
+            <p>✅ Артворк готов</p>
+            <p>✅ Мастер готов</p>
+            <p>✅ Метаданные заполнены</p>
+            <Button variant="secondary">Отметить как релиз</Button>
           </div>
         </Card>
       )}

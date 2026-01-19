@@ -15,12 +15,12 @@ export default function AssistantPage() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Assistant</CardTitle>
-          <CardDescription>Mock AI interface for structured guidance.</CardDescription>
+          <CardTitle>Ассистент</CardTitle>
+          <CardDescription>Интерфейс мок‑AI для структурированных подсказок.</CardDescription>
         </CardHeader>
         <div className="flex flex-wrap gap-2">
-          <Badge>Song: Neon Streetlights</Badge>
-          <Badge>Idea: Night ride hook</Badge>
+          <Badge>Песня: Neon Streetlights</Badge>
+          <Badge>Идея: Night ride hook</Badge>
           <Badge>PATH: Idea Collector</Badge>
         </div>
       </Card>
@@ -34,15 +34,15 @@ export default function AssistantPage() {
                 item.role === "assistant" ? "bg-slate-50" : "bg-white"
               }`}
             >
-              <p className="text-xs text-brand-muted">{item.role === "assistant" ? "Assistant" : "You"}</p>
+              <p className="text-xs text-brand-muted">{item.role === "assistant" ? "Ассистент" : "Вы"}</p>
               <p>{item.text}</p>
             </div>
           ))}
-          {messages.length === 0 && <p className="text-sm text-brand-muted">No messages yet.</p>}
+          {messages.length === 0 && <p className="text-sm text-brand-muted">Пока нет сообщений.</p>}
         </div>
 
         <div className="flex gap-2">
-          <Input value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Ask the assistant" />
+          <Input value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Задать вопрос ассистенту" />
           <Button
             onClick={async () => {
               if (!message) return;
@@ -63,7 +63,7 @@ export default function AssistantPage() {
               setMessages([...nextMessages, { role: "assistant", text: data.reply }]);
             }}
           >
-            Send
+            Отправить
           </Button>
         </div>
       </Card>

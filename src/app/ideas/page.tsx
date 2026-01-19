@@ -25,12 +25,12 @@ export default function IdeasPage() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Create text idea</CardTitle>
-          <CardDescription>Quickly capture lyrics, hooks, and concepts.</CardDescription>
+          <CardTitle>Создать текстовую идею</CardTitle>
+          <CardDescription>Быстро фиксируй тексты, хуки и концепции.</CardDescription>
         </CardHeader>
         <div className="space-y-3">
-          <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Idea title" />
-          <Textarea value={text} onChange={(event) => setText(event.target.value)} rows={4} placeholder="Markdown idea" />
+          <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Название идеи" />
+          <Textarea value={text} onChange={(event) => setText(event.target.value)} rows={4} placeholder="Идея в Markdown" />
           <Button
             onClick={async () => {
               await fetch("/api/ideas", {
@@ -43,35 +43,35 @@ export default function IdeasPage() {
               await refetch();
             }}
           >
-            Save idea
+            Сохранить идею
           </Button>
         </div>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Upload audio idea</CardTitle>
-          <CardDescription>Attach a quick voice memo or melody sketch.</CardDescription>
+          <CardTitle>Загрузить аудио‑идею</CardTitle>
+          <CardDescription>Прикрепи войс‑мемо или мелодический скетч.</CardDescription>
         </CardHeader>
         <div className="prose-mvp">
-          <p>Upload handled via /api/audio-clips (multipart). UI stub for MVP.</p>
+          <p>Загрузка через /api/audio-clips (multipart). UI‑заглушка для MVP.</p>
         </div>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Ideas library</CardTitle>
-          <CardDescription>Convert ideas into songs when ready.</CardDescription>
+          <CardTitle>Библиотека идей</CardTitle>
+          <CardDescription>Преобразуй идеи в песни, когда готов.</CardDescription>
         </CardHeader>
         <div className="space-y-2 text-sm">
           {ideas?.map((idea) => (
             <div key={idea.id} className="rounded-lg border border-brand-border bg-brand-surface p-3">
               <p className="font-medium">{idea.title}</p>
-              <p className="text-xs text-brand-muted">{idea.tags?.join(", ") || "No tags"}</p>
-              <Button variant="secondary" className="mt-2">Convert to song</Button>
+              <p className="text-xs text-brand-muted">{idea.tags?.join(", ") || "Без тегов"}</p>
+              <Button variant="secondary" className="mt-2">Преобразовать в песню</Button>
             </div>
           ))}
-          {!ideas?.length && <p className="text-brand-muted">No ideas yet.</p>}
+          {!ideas?.length && <p className="text-brand-muted">Пока нет идей.</p>}
         </div>
       </Card>
     </div>

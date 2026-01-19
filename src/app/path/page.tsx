@@ -26,8 +26,8 @@ export default function PathPage() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Current level</CardTitle>
-          <CardDescription>{currentLevel?.name ?? "Loading..."}</CardDescription>
+          <CardTitle>Текущий уровень</CardTitle>
+          <CardDescription>{currentLevel?.name ?? "Загрузка..."}</CardDescription>
         </CardHeader>
         <div className="prose-mvp space-y-2">
           <p>{currentLevel?.description}</p>
@@ -39,8 +39,8 @@ export default function PathPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Checklist</CardTitle>
-          <CardDescription>Release gates for this PATH level.</CardDescription>
+          <CardTitle>Чек‑лист</CardTitle>
+          <CardDescription>Критерии перехода для этого уровня PATH.</CardDescription>
         </CardHeader>
         <pre className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
           {JSON.stringify(currentLevel?.checklistTemplate ?? {}, null, 2)}
@@ -49,19 +49,19 @@ export default function PathPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Contract with self</CardTitle>
-          <CardDescription>Write your commitment for this level.</CardDescription>
+          <CardTitle>Контракт с собой</CardTitle>
+          <CardDescription>Запиши обязательства для этого уровня.</CardDescription>
         </CardHeader>
         <Textarea rows={4} value={contract} onChange={(event) => setContract(event.target.value)} />
         <Button className="mt-3" variant="secondary">
-          Save commitment
+          Сохранить обязательства
         </Button>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Progress timeline</CardTitle>
-          <CardDescription>Notes and milestones you log along the way.</CardDescription>
+          <CardTitle>Таймлайн прогресса</CardTitle>
+          <CardDescription>Заметки и milestones по пути.</CardDescription>
         </CardHeader>
         <div className="space-y-2 text-sm">
           {logs?.map((log) => (
@@ -70,7 +70,7 @@ export default function PathPage() {
               <p className="text-xs text-brand-muted">{log.text}</p>
             </div>
           ))}
-          {!logs?.length && <p className="text-brand-muted">No progress logs yet.</p>}
+          {!logs?.length && <p className="text-brand-muted">Пока нет записей прогресса.</p>}
         </div>
       </Card>
     </div>

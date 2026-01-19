@@ -21,8 +21,8 @@ export default function HubPage() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Artists directory</CardTitle>
-          <CardDescription>Find collaborators in the CIS community.</CardDescription>
+          <CardTitle>Каталог артистов</CardTitle>
+          <CardDescription>Найди коллабораторов в комьюнити СНГ.</CardDescription>
         </CardHeader>
         <div className="grid gap-3 md:grid-cols-2">
           {artists?.map((artist) => (
@@ -31,19 +31,19 @@ export default function HubPage() {
               <p className="text-xs text-brand-muted">{artist.artistProfile?.city}</p>
               <p className="text-xs text-brand-muted">{artist.artistProfile?.genres?.join(", ")}</p>
               <div className="mt-2 flex gap-2">
-                <Button variant="secondary">Mail</Button>
+                <Button variant="secondary">Почта</Button>
                 <Button variant="secondary">t.me</Button>
               </div>
             </div>
           ))}
-          {!artists?.length && <p className="text-sm text-brand-muted">No artists listed.</p>}
+          {!artists?.length && <p className="text-sm text-brand-muted">Артисты не найдены.</p>}
         </div>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Specialists directory</CardTitle>
-          <CardDescription>Connect with producers and engineers.</CardDescription>
+          <CardTitle>Каталог специалистов</CardTitle>
+          <CardDescription>Связь с продюсерами и инженерами.</CardDescription>
         </CardHeader>
         <div className="grid gap-3 md:grid-cols-2">
           {specialists?.map((specialist) => (
@@ -52,12 +52,12 @@ export default function HubPage() {
               <p className="text-xs text-brand-muted">{specialist.specialistProfile?.type}</p>
               <p className="text-xs text-brand-muted">{specialist.specialistProfile?.priceInfo}</p>
               <div className="mt-2 flex gap-2">
-                <Button variant="secondary">Mail</Button>
+                <Button variant="secondary">Почта</Button>
                 <Button variant="secondary">t.me</Button>
               </div>
             </div>
           ))}
-          {!specialists?.length && <p className="text-sm text-brand-muted">No specialists listed.</p>}
+          {!specialists?.length && <p className="text-sm text-brand-muted">Специалисты не найдены.</p>}
         </div>
       </Card>
     </div>

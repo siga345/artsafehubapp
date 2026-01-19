@@ -28,10 +28,10 @@ export default function LearnPage() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Learning library</CardTitle>
-          <CardDescription>Filter by tags, song status, or PATH level.</CardDescription>
+          <CardTitle>Библиотека обучения</CardTitle>
+          <CardDescription>Фильтруй по тегам, статусу песни или уровню PATH.</CardDescription>
         </CardHeader>
-        <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search resources" />
+        <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск материалов" />
       </Card>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -42,15 +42,15 @@ export default function LearnPage() {
               <CardDescription>{item.description}</CardDescription>
             </CardHeader>
             <div className="text-sm text-brand-muted">
-              <p>Type: {item.type}</p>
-              <p>Tags: {item.tags?.join(", ")}</p>
+              <p>Тип: {item.type}</p>
+              <p>Теги: {item.tags?.join(", ")}</p>
               <a className="text-brand-accent" href={item.url} target="_blank" rel="noreferrer">
-                Open resource
+                Открыть материал
               </a>
             </div>
           </Card>
         ))}
-        {!filtered.length && <p className="text-sm text-brand-muted">No learning items found.</p>}
+        {!filtered.length && <p className="text-sm text-brand-muted">Материалы не найдены.</p>}
       </div>
     </div>
   );

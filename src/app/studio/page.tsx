@@ -26,16 +26,16 @@ export default function StudioPage() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Create booking</CardTitle>
-          <CardDescription>Simple list-based calendar for sessions.</CardDescription>
+          <CardTitle>Создать бронирование</CardTitle>
+          <CardDescription>Простой список сессий.</CardDescription>
         </CardHeader>
         <div className="grid gap-3 md:grid-cols-3">
           <Input type="datetime-local" value={startAt} onChange={(event) => setStartAt(event.target.value)} />
           <Input type="datetime-local" value={endAt} onChange={(event) => setEndAt(event.target.value)} />
           <Select value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="REQUESTED">Requested</option>
-            <option value="CONFIRMED">Confirmed</option>
-            <option value="CANCELLED">Cancelled</option>
+            <option value="REQUESTED">Запрошено</option>
+            <option value="CONFIRMED">Подтверждено</option>
+            <option value="CANCELLED">Отменено</option>
           </Select>
         </div>
         <Button
@@ -56,14 +56,14 @@ export default function StudioPage() {
             await refetch();
           }}
         >
-          Save booking
+          Сохранить бронирование
         </Button>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Booking list</CardTitle>
-          <CardDescription>Upcoming and past sessions.</CardDescription>
+          <CardTitle>Список бронирований</CardTitle>
+          <CardDescription>Будущие и прошедшие сессии.</CardDescription>
         </CardHeader>
         <div className="space-y-2 text-sm">
           {bookings?.map((booking) => (
@@ -74,7 +74,7 @@ export default function StudioPage() {
               <p className="text-xs text-brand-muted">{booking.status}</p>
             </div>
           ))}
-          {!bookings?.length && <p className="text-brand-muted">No bookings yet.</p>}
+          {!bookings?.length && <p className="text-brand-muted">Пока нет бронирований.</p>}
         </div>
       </Card>
     </div>

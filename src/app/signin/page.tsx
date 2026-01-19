@@ -15,8 +15,8 @@ export default function SignInPage() {
     <div className="mx-auto max-w-md">
       <Card>
         <CardHeader>
-          <CardTitle>Sign in</CardTitle>
-          <CardDescription>Use the demo credentials from the README.</CardDescription>
+          <CardTitle>Вход</CardTitle>
+          <CardDescription>Используйте демо‑логин из README.</CardDescription>
         </CardHeader>
         <form
           className="space-y-3"
@@ -34,13 +34,13 @@ export default function SignInPage() {
           />
           <Input
             type="password"
-            placeholder="Password"
+            placeholder="Пароль"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             required
           />
           <Button type="submit" className="w-full">
-            Sign in
+            Войти
           </Button>
         </form>
       </Card>

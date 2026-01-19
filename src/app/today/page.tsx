@@ -26,8 +26,8 @@ export default function TodayPage() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Current PATH level</CardTitle>
-          <CardDescription>{currentLevel?.name ?? "Loading..."}</CardDescription>
+          <CardTitle>Текущий уровень PATH</CardTitle>
+          <CardDescription>{currentLevel?.name ?? "Загрузка..."}</CardDescription>
         </CardHeader>
         <div className="prose-mvp">
           <p>{currentLevel?.description ?? ""}</p>
@@ -36,8 +36,8 @@ export default function TodayPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Priority tasks</CardTitle>
-          <CardDescription>1–3 focus items to keep momentum.</CardDescription>
+          <CardTitle>Приоритетные задачи</CardTitle>
+          <CardDescription>1–3 фокус‑задачи для поддержания темпа.</CardDescription>
         </CardHeader>
         <ul className="space-y-2 text-sm text-slate-700">
           {priorityTasks.map((task) => (
@@ -46,26 +46,26 @@ export default function TodayPage() {
               <p className="text-xs text-brand-muted">{task.status}</p>
             </li>
           ))}
-          {priorityTasks.length === 0 && <li className="text-brand-muted">No tasks yet.</li>}
+          {priorityTasks.length === 0 && <li className="text-brand-muted">Пока нет задач.</li>}
         </ul>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Quick actions</CardTitle>
-          <CardDescription>Capture momentum in one click.</CardDescription>
+          <CardTitle>Быстрые действия</CardTitle>
+          <CardDescription>Фиксируй импульс в один клик.</CardDescription>
         </CardHeader>
         <div className="flex flex-wrap gap-3">
-          <Button variant="secondary">Record Idea</Button>
-          <Button variant="secondary">Create Song</Button>
-          <Button variant="secondary">Ask Assistant</Button>
+          <Button variant="secondary">Записать идею</Button>
+          <Button variant="secondary">Создать песню</Button>
+          <Button variant="secondary">Спросить ассистента</Button>
         </div>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Next step</CardTitle>
-          <CardDescription>Mock AI suggestion based on your context.</CardDescription>
+          <CardTitle>Следующий шаг</CardTitle>
+          <CardDescription>Подсказка от мок‑AI на основе контекста.</CardDescription>
         </CardHeader>
         <div className="space-y-3">
           <Button
@@ -83,7 +83,7 @@ export default function TodayPage() {
               setNextStep(data.nextStep);
             }}
           >
-            Get next step
+            Получить следующий шаг
           </Button>
           {nextStep && <p className="text-sm text-slate-700">{nextStep}</p>}
         </div>

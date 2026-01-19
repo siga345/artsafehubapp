@@ -2,14 +2,14 @@ import Link from "next/link";
 import { Music2, Sparkles } from "lucide-react";
 
 const navLinks = [
-  { href: "/today", label: "Today" },
-  { href: "/songs", label: "Songs" },
-  { href: "/ideas", label: "Ideas" },
+  { href: "/today", label: "Сегодня" },
+  { href: "/songs", label: "Песни" },
+  { href: "/ideas", label: "Идеи" },
   { href: "/path", label: "PATH" },
   { href: "/hub", label: "Hub" },
-  { href: "/studio", label: "Studio" },
-  { href: "/learn", label: "Learn" },
-  { href: "/assistant", label: "Assistant" }
+  { href: "/studio", label: "Студия" },
+  { href: "/learn", label: "Обучение" },
+  { href: "/assistant", label: "Ассистент" }
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -23,12 +23,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
             <div>
               <p className="text-sm font-semibold">ART SAFE HUB</p>
-              <p className="text-xs text-brand-muted">Artist workspace for CIS beginners</p>
+              <p className="text-xs text-brand-muted">Воркспейс для начинающих артистов СНГ</p>
             </div>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-brand-border bg-brand-surface px-3 py-1 text-xs text-brand-muted">
             <Sparkles className="h-4 w-4" />
-            <span>AI placeholder</span>
+            <span>AI заглушка</span>
           </div>
         </div>
         <nav className="border-t border-brand-border bg-white">
