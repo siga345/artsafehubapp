@@ -1,0 +1,233 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ARTIST
+  PRODUCER
+  ENGINEER
+  ADMIN
+}
+
+enum AvailabilityStatus {
+  OPEN
+  LIMITED
+  CLOSED
+}
+
+enum SpecialistType {
+  PRODUCER
+  ENGINEER
+}
+
+enum SongStatus {
+  IDEA_DEMO
+  WRITING
+  ARRANGEMENT
+  RECORDING
+  MIXING
+  MASTERING
+  READY_FOR_RELEASE
+  RELEASED
+  ARCHIVED
+}
+
+enum TaskStatus {
+  TODO
+  DOING
+  DONE
+}
+
+enum PathLogType {
+  NOTE
+  MILESTONE
+}
+
+enum BudgetCategory {
+  BEAT
+  STUDIO
+  MIXING
+  MASTERING
+  COVER
+  PROMO
+  OTHER
+}
+
+enum BookingStatus {
+  REQUESTED
+  CONFIRMED
+  CANCELLED
+}
+
+enum LearningType {
+  VIDEO
+  TEXT
+}
+
+model User {
+  id            String             @id @default(cuid())
+  email         String             @unique
+  passwordHash  String
+  name          String
+  role          UserRole           @default(ARTIST)
+  pathLevelId   Int?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  artistProfile ArtistProfile?
+  specialistProfile SpecialistProfile?
+  ideas         Idea[]
+  audioClips    AudioClip[]
+  songs         Song[]
+  songMembers   SongMember[]
+  tasks         Task[]
+  pathLogs      PathProgressLog[]
+  bookings      Booking[]
+
+  pathLevel     PathLevel?         @relation(fields: [pathLevelId], references: [id])
+}
+
+model ArtistProfile {
+  userId       String   @id
+  genres       String[]
+  city         String
+  bio          String
+  links        Json
+  availability AvailabilityStatus
+  user         User     @relation(fields: [userId], references: [id])
+}
+
+model SpecialistProfile {
+  userId        String   @id
+  type          SpecialistType
+  services      Json
+  portfolioLinks Json
+  priceInfo     String
+  contact       String
+  user          User     @relation(fields: [userId], references: [id])
+}
+
+model Idea {
+  id        String   @id @default(cuid())
+  ownerId   String
+  title     String
+  text      String
+  tags      String[]
+  createdAt DateTime @default(now())
+  owner     User     @relation(fields: [ownerId], references: [id])
+  audioClips AudioClip[]
+}
+
+model AudioClip {
+  id          String   @id @default(cuid())
+  ownerId     String
+  ideaId      String?
+  songId      String?
+  filePath    String
+  durationSec Int
+  noteText    String
+  createdAt   DateTime @default(now())
+  owner       User     @relation(fields: [ownerId], references: [id])
+  idea        Idea?    @relation(fields: [ideaId], references: [id])
+  song        Song?    @relation(fields: [songId], references: [id])
+}
+
+model Song {
+  id          String   @id @default(cuid())
+  ownerId     String
+  title       String
+  description String
+  status      SongStatus
+  bpm         Int?
+  key         String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  owner       User     @relation(fields: [ownerId], references: [id])
+  members     SongMember[]
+  tasks       Task[]
+  budgetItems SongBudgetItem[]
+  audioClips  AudioClip[]
+}
+
+model SongMember {
+  songId  String
+  userId  String
+  role    UserRole
+  addedAt DateTime @default(now())
+  song    Song     @relation(fields: [songId], references: [id])
+  user    User     @relation(fields: [userId], references: [id])
+
+  @@id([songId, userId])
+}
+
+model Task {
+  id          String     @id @default(cuid())
+  ownerId     String
+  songId      String?
+  pathLevelId Int?
+  title       String
+  description String
+  status      TaskStatus @default(TODO)
+  dueDate     DateTime?
+  createdAt   DateTime   @default(now())
+  owner       User       @relation(fields: [ownerId], references: [id])
+  song        Song?      @relation(fields: [songId], references: [id])
+  pathLevel   PathLevel? @relation(fields: [pathLevelId], references: [id])
+}
+
+model PathLevel {
+  id               Int      @id @default(autoincrement())
+  order            Int
+  name             String
+  description      String
+  criteria         Json
+  checklistTemplate Json
+  createdAt        DateTime @default(now())
+  users            User[]
+  tasks            Task[]
+}
+
+model PathProgressLog {
+  id        String     @id @default(cuid())
+  userId    String
+  type      PathLogType
+  text      String
+  createdAt DateTime   @default(now())
+  user      User       @relation(fields: [userId], references: [id])
+}
+
+model SongBudgetItem {
+  id        String        @id @default(cuid())
+  songId    String
+  category  BudgetCategory
+  amount    Decimal
+  currency  String        @default("RUB")
+  note      String
+  createdAt DateTime      @default(now())
+  song      Song          @relation(fields: [songId], references: [id])
+}
+
+model Booking {
+  id        String        @id @default(cuid())
+  userId    String
+  startAt   DateTime
+  endAt     DateTime
+  status    BookingStatus
+  notes     String
+  user      User          @relation(fields: [userId], references: [id])
+}
+
+model LearningItem {
+  id            String       @id @default(cuid())
+  type          LearningType
+  title         String
+  description   String
+  url           String
+  tags          String[]
+  pathLevelIds  Int[]
+  songStatuses  String[]
+}
