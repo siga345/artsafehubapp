@@ -1,15 +1,13 @@
+import Image from "next/image";
 import Link from "next/link";
-import { Music2, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 
 const navLinks = [
-  { href: "/today", label: "Сегодня" },
-  { href: "/songs", label: "Песни" },
-  { href: "/ideas", label: "Идеи" },
-  { href: "/path", label: "PATH" },
-  { href: "/hub", label: "Hub" },
-  { href: "/studio", label: "Студия" },
-  { href: "/learn", label: "Обучение" },
-  { href: "/assistant", label: "Ассистент" }
+  { href: "/today", label: "HOME" },
+  { href: "/find", label: "FIND" },
+  { href: "/songs", label: "SONGS" },
+  { href: "/assistant", label: "AI ASSIST" },
+  { href: "/id", label: "ID" }
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -18,12 +16,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <header className="border-b border-brand-border bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-ink text-white">
-              <Music2 className="h-5 w-5" />
+            <div className="h-10 w-10 overflow-hidden rounded-full border border-brand-border bg-white">
+              <Image
+                src="/images/artsafeplace-logo.jpeg"
+                alt="ART SAFE PLACE logo"
+                width={40}
+                height={40}
+                className="h-full w-full object-cover"
+                priority
+              />
             </div>
             <div>
-              <p className="text-sm font-semibold">ART SAFE HUB</p>
-              <p className="text-xs text-brand-muted">Воркспейс для начинающих артистов СНГ</p>
+              <p className="text-sm font-semibold">ART SAFE PLACE</p>
+              <p className="text-xs text-brand-muted">PATH + FIND + SONGS + SAFE ID</p>
             </div>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-brand-border bg-brand-surface px-3 py-1 text-xs text-brand-muted">

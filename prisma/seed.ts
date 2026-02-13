@@ -1,139 +1,257 @@
-import { PrismaClient, SongStatus, TaskStatus, BookingStatus, LearningType, PathLogType } from "@prisma/client";
+import { PrismaClient, type FindCategory, type UserRole } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
+type SpecialistSeedUser = {
+  email: string;
+  nickname: string;
+  safeId: string;
+  role: UserRole;
+  category: FindCategory;
+  city: string;
+  isOnline: boolean;
+  isAvailableNow: boolean;
+  budgetFrom: number;
+  contactTelegram?: string;
+  contactUrl?: string;
+};
 
 async function main() {
   const passwordHash = await bcrypt.hash("demo1234", 10);
 
-  const pathLevels = await prisma.pathLevel.createMany({
+  await prisma.demo.deleteMany();
+  await prisma.track.deleteMany();
+  await prisma.folder.deleteMany();
+  await prisma.dailyCheckIn.deleteMany();
+  await prisma.dailyMicroStep.deleteMany();
+  await prisma.weeklyActivity.deleteMany();
+  await prisma.specialistProfile.deleteMany();
+  await prisma.user.deleteMany();
+  await prisma.pathStage.deleteMany();
+
+  await prisma.pathStage.createMany({
     data: [
       {
         order: 1,
-        name: "Idea Collector",
-        description: "Capture 10 raw ideas and define your sound.",
-        criteria: { ideas: 10 },
-        checklistTemplate: { prompts: ["Record 3 voice memos", "Write 1 verse"] }
+        name: "Идея",
+        iconKey: "spark",
+        description: "Зафиксируй ядро трека: тема, эмоция и хук."
       },
       {
         order: 2,
-        name: "Song Builder",
-        description: "Turn 3 ideas into full song drafts.",
-        criteria: { drafts: 3 },
-        checklistTemplate: { prompts: ["Select reference track", "Finish hook"] }
+        name: "Демо",
+        iconKey: "mic",
+        description: "Собери первые демки и черновой вайб песни."
       },
       {
         order: 3,
-        name: "Release Ready",
-        description: "Prepare your first release package.",
-        criteria: { releases: 1 },
-        checklistTemplate: { prompts: ["Artwork brief", "Mastered export"] }
+        name: "Производство",
+        iconKey: "knobs",
+        description: "Подготовь аранжировку и продакшн-направление."
+      },
+      {
+        order: 4,
+        name: "Запись",
+        iconKey: "record",
+        description: "Запиши вокал и ключевые дорожки."
+      },
+      {
+        order: 5,
+        name: "Сведение",
+        iconKey: "sliders",
+        description: "Собери цельный микс с нужным балансом."
+      },
+      {
+        order: 6,
+        name: "Мастеринг",
+        iconKey: "wave",
+        description: "Подготовь финальный мастер для площадок."
+      },
+      {
+        order: 7,
+        name: "Релиз",
+        iconKey: "rocket",
+        description: "Выпусти трек и опубликуй на площадках."
+      },
+      {
+        order: 8,
+        name: "Промо-съёмка",
+        iconKey: "camera",
+        description: "Сними и подготовь промо-контент."
+      },
+      {
+        order: 9,
+        name: "Выпуск промо",
+        iconKey: "megaphone",
+        description: "Запусти промо и поддержи релиз активностями."
       }
     ]
   });
 
-  const firstLevel = await prisma.pathLevel.findFirst({ where: { order: 1 } });
+  const stages = await prisma.pathStage.findMany({ orderBy: { order: "asc" } });
+  const ideaStage = stages.find((stage: { order: number }) => stage.order === 1);
+  const demoStage = stages.find((stage: { order: number }) => stage.order === 2);
+  const productionStage = stages.find((stage: { order: number }) => stage.order === 3);
+  if (!ideaStage || !demoStage || !productionStage) {
+    throw new Error("Required PATH stages are missing after seed setup.");
+  }
 
   const user = await prisma.user.create({
     data: {
       email: "demo@artsafehub.app",
       passwordHash,
-      name: "Demo Artist",
+      nickname: "Demo Artist",
+      safeId: "SAFE-DEMO-001",
       role: "ARTIST",
-      pathLevelId: firstLevel?.id,
-      artistProfile: {
-        create: {
-          genres: ["Hip-Hop", "Pop"],
-          city: "Almaty",
-          bio: "Beginner artist exploring melodic rap.",
-          links: { instagram: "https://instagram.com/demo" },
-          availability: "OPEN"
-        }
+      pathStageId: ideaStage.id,
+      links: {
+        telegram: "https://t.me/demo_artist",
+        youtube: "https://youtube.com/@demoartist"
       }
     }
   });
 
-  const song = await prisma.song.create({
+  const folder = await prisma.folder.create({
     data: {
-      ownerId: user.id,
-      title: "Neon Streetlights",
-      description: "Draft chorus, verse ideas, and mood references.",
-      status: SongStatus.WRITING,
-      bpm: 92,
-      key: "Am"
+      userId: user.id,
+      title: "Новый релиз"
     }
   });
 
-  await prisma.task.createMany({
+  const track = await prisma.track.create({
+    data: {
+      userId: user.id,
+      folderId: folder.id,
+      title: "Night Ride",
+      pathStageId: demoStage.id
+    }
+  });
+
+  await prisma.demo.createMany({
     data: [
       {
-        ownerId: user.id,
-        songId: song.id,
-        title: "Finish verse 1",
-        description: "Write full lyrics for the first verse.",
-        status: TaskStatus.DOING
+        trackId: track.id,
+        audioUrl: "uploads/2026/02/12/demo-night-ride-v1.webm",
+        textNote: "Черновой хук + ритм слога.",
+        duration: 34
       },
       {
-        ownerId: user.id,
-        title: "Define weekly practice slots",
-        description: "Block 3 sessions for writing this week.",
-        status: TaskStatus.TODO,
-        pathLevelId: firstLevel?.id ?? null
+        trackId: track.id,
+        audioUrl: "uploads/2026/02/12/demo-night-ride-v2.webm",
+        textNote: "Вариант припева с другой мелодией.",
+        duration: 41
       }
     ]
   });
 
-  await prisma.idea.create({
-    data: {
-      ownerId: user.id,
-      title: "Night ride hook",
-      text: "*Hook idea:* \n\nLate-night city lights...",
-      tags: ["hook", "melodic"]
-    }
-  });
+  const today = new Date();
+  const dateOnly = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const dayOfWeek = dateOnly.getUTCDay();
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const weekStartDate = new Date(dateOnly);
+  weekStartDate.setUTCDate(dateOnly.getUTCDate() + mondayOffset);
 
-  await prisma.pathProgressLog.create({
+  await prisma.dailyCheckIn.create({
     data: {
       userId: user.id,
-      type: PathLogType.NOTE,
-      text: "Committed to writing every Tuesday and Friday."
+      date: dateOnly,
+      mood: "NORMAL",
+      note: "Двигаюсь мягко, но стабильно."
     }
   });
 
-  await prisma.booking.create({
+  await prisma.dailyMicroStep.create({
     data: {
       userId: user.id,
-      startAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      endAt: new Date(Date.now() + 25 * 60 * 60 * 1000),
-      status: BookingStatus.REQUESTED,
-      notes: "Looking for a 1-hour vocal recording slot."
+      date: dateOnly,
+      pathStageId: productionStage.id,
+      text: "Собери 3 референса для аранжировки.",
+      isCompleted: false
     }
   });
 
-  await prisma.learningItem.createMany({
-    data: [
-      {
-        type: LearningType.VIDEO,
-        title: "Writing hooks for beginners",
-        description: "Short tutorial on memorable hooks.",
-        url: "https://example.com/hooks",
-        tags: ["writing", "hooks"],
-        pathLevelIds: [firstLevel?.id ?? 1],
-        songStatuses: [SongStatus.WRITING]
-      },
-      {
-        type: LearningType.TEXT,
-        title: "Mix prep checklist",
-        description: "How to organize stems before mixing.",
-        url: "https://example.com/mix-prep",
-        tags: ["mixing"],
-        pathLevelIds: [2],
-        songStatuses: [SongStatus.MIXING]
+  await prisma.weeklyActivity.create({
+    data: {
+      userId: user.id,
+      weekStartDate,
+      activeDays: 3
+    }
+  });
+
+  const specialistUsers: SpecialistSeedUser[] = [
+    {
+      email: "producer@artsafehub.app",
+      nickname: "Misha Prod",
+      safeId: "SAFE-SP-001",
+      role: "SPECIALIST",
+      category: "PRODUCER",
+      city: "Москва",
+      isOnline: true,
+      isAvailableNow: true,
+      budgetFrom: 15000,
+      contactTelegram: "https://t.me/misha_prod"
+    },
+    {
+      email: "engineer@artsafehub.app",
+      nickname: "Lena Mix",
+      safeId: "SAFE-SP-002",
+      role: "SPECIALIST",
+      category: "AUDIO_ENGINEER",
+      city: "Санкт-Петербург",
+      isOnline: true,
+      isAvailableNow: false,
+      budgetFrom: 12000,
+      contactTelegram: "https://t.me/lena_mix"
+    },
+    {
+      email: "studio@artsafehub.app",
+      nickname: "Frame Studio",
+      safeId: "SAFE-ST-001",
+      role: "STUDIO",
+      category: "RECORDING_STUDIO",
+      city: "Алматы",
+      isOnline: false,
+      isAvailableNow: true,
+      budgetFrom: 8000,
+      contactUrl: "https://framestudio.example"
+    }
+  ];
+
+  for (const specialist of specialistUsers) {
+    const createdUser = await prisma.user.create({
+      data: {
+        email: specialist.email,
+        passwordHash,
+        nickname: specialist.nickname,
+        safeId: specialist.safeId,
+        role: specialist.role,
+        pathStageId: ideaStage.id
       }
-    ]
-  });
+    });
 
-  console.log("Seed data created", { pathLevels, user: user.email });
+    await prisma.specialistProfile.create({
+      data: {
+        userId: createdUser.id,
+        category: specialist.category,
+        city: specialist.city,
+        isOnline: specialist.isOnline,
+        isAvailableNow: specialist.isAvailableNow,
+        bio: "Работаю с артистами на этапах от демо до релиза.",
+        portfolioLinks: ["https://example.com/portfolio"],
+        budgetFrom: specialist.budgetFrom,
+        contactTelegram: specialist.contactTelegram,
+        contactUrl: specialist.contactUrl
+      }
+    });
+  }
+
+  console.log("Seed data created", {
+    pathStages: stages.length,
+    artist: user.email,
+    tracks: 1,
+    demos: 2,
+    specialists: specialistUsers.length
+  });
 }
 
 main()

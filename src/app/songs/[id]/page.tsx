@@ -1,155 +1,191 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
 
-const statuses = [
-  "IDEA_DEMO",
-  "WRITING",
-  "ARRANGEMENT",
-  "RECORDING",
-  "MIXING",
-  "MASTERING",
-  "READY_FOR_RELEASE",
-  "RELEASED",
-  "ARCHIVED"
-];
+type PathStage = {
+  id: number;
+  name: string;
+};
+
+type Demo = {
+  id: string;
+  audioUrl: string;
+  textNote: string | null;
+  duration: number;
+  createdAt: string;
+};
+
+type Track = {
+  id: string;
+  title: string;
+  folderId: string | null;
+  pathStageId: number | null;
+  pathStage?: PathStage | null;
+  demos: Demo[];
+};
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleString("ru-RU", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" });
+}
+
+function formatDuration(seconds: number) {
+  const mm = Math.floor(seconds / 60);
+  const ss = Math.floor(seconds % 60);
+  return `${mm}:${String(ss).padStart(2, "0")}`;
+}
 
 async function fetcher<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error("Failed to fetch");
-  }
-  return res.json();
+  return apiFetchJson<T>(url);
 }
 
 export default function SongDetailPage({ params }: { params: { id: string } }) {
-  const { data: song } = useQuery({ queryKey: ["song", params.id], queryFn: () => fetcher<any>(`/api/songs/${params.id}`) });
-  const [notes, setNotes] = useState("");
+  const router = useRouter();
+  const { data: track, refetch } = useQuery({
+    queryKey: ["song-track", params.id],
+    queryFn: () => fetcher<Track>(`/api/songs/${params.id}`)
+  });
+  const { data: stages } = useQuery({
+    queryKey: ["song-path-stages"],
+    queryFn: () => fetcher<PathStage[]>("/api/path/stages")
+  });
 
-  if (!song) {
-    return <p className="text-sm text-brand-muted">Загрузка...</p>;
+  const [title, setTitle] = useState("");
+  const [stageId, setStageId] = useState("");
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [updatingDemoId, setUpdatingDemoId] = useState("");
+  const [demoNotes, setDemoNotes] = useState<Record<string, string>>({});
+
+  if (!track) {
+    return <p className="text-sm text-brand-muted">Загрузка трека...</p>;
   }
+
+  const currentTitle = title || track.title;
+  const currentStage = stageId === "" ? track.pathStageId : stageId === "NONE" ? null : Number(stageId);
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>{song.title}</CardTitle>
-          <CardDescription>{song.description}</CardDescription>
+          <CardTitle>Трек</CardTitle>
+          <CardDescription>Название и этап по PATH.</CardDescription>
         </CardHeader>
-        <div className="flex flex-wrap gap-3">
-          <Select defaultValue={song.status}>
-            {statuses.map((status) => (
-              <option key={status} value={status}>
-                {status.replaceAll("_", " ")}
+        <div className="grid gap-3 md:grid-cols-3">
+          <Input value={currentTitle} onChange={(event) => setTitle(event.target.value)} />
+          <Select
+            value={currentStage ? String(currentStage) : "NONE"}
+            onChange={(event) => setStageId(event.target.value)}
+          >
+            <option value="NONE">Этап не выбран</option>
+            {stages?.map((stage) => (
+              <option key={stage.id} value={String(stage.id)}>
+                {stage.name}
               </option>
             ))}
           </Select>
-          {song.bpm && <Badge>{song.bpm} BPM</Badge>}
-          {song.key && <Badge>Key: {song.key}</Badge>}
+          <Button
+            disabled={savingMeta || !currentTitle.trim()}
+            onClick={async () => {
+              setSavingMeta(true);
+              await apiFetch(`/api/songs/${track.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  title: currentTitle.trim(),
+                  pathStageId: currentStage ?? null
+                })
+              });
+              setTitle("");
+              setStageId("");
+              await refetch();
+              setSavingMeta(false);
+            }}
+          >
+            {savingMeta ? "Сохраняем..." : "Сохранить"}
+          </Button>
         </div>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Аудио‑клипы</CardTitle>
-          <CardDescription>Загруженные войс‑мемо и скетчи.</CardDescription>
+          <CardTitle>Демки</CardTitle>
+          <CardDescription>Аудио + текст к демке + этап трека.</CardDescription>
         </CardHeader>
-        <div className="space-y-2 text-sm">
-          {song.audioClips?.map((clip: any) => (
-            <div key={clip.id} className="rounded-lg border border-brand-border bg-brand-surface p-3">
-              <p className="font-medium">{clip.filePath.split("/").pop()}</p>
-              <p className="text-xs text-brand-muted">{clip.durationSec}s • {clip.noteText}</p>
-            </div>
-          ))}
-          {!song.audioClips?.length && <p className="text-brand-muted">Пока нет клипов.</p>}
-        </div>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Текст / заметки</CardTitle>
-          <CardDescription>Markdown‑редактор для черновика.</CardDescription>
-        </CardHeader>
-        <Textarea
-          rows={6}
-          placeholder="Пиши черновик здесь..."
-          value={notes}
-          onChange={(event) => setNotes(event.target.value)}
-        />
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Задачи</CardTitle>
-          <CardDescription>Что нужно сделать для этой песни.</CardDescription>
-        </CardHeader>
-        <div className="space-y-2 text-sm">
-          {song.tasks?.map((task: any) => (
-            <div key={task.id} className="rounded-lg border border-brand-border bg-brand-surface p-3">
-              <p className="font-medium">{task.title}</p>
-              <p className="text-xs text-brand-muted">{task.status}</p>
-            </div>
-          ))}
-          {!song.tasks?.length && <p className="text-brand-muted">Пока нет задач.</p>}
-        </div>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Бюджет</CardTitle>
-          <CardDescription>Отслеживай плановые расходы.</CardDescription>
-        </CardHeader>
-        <div className="space-y-2 text-sm">
-          {song.budgetItems?.map((item: any) => (
-            <div key={item.id} className="rounded-lg border border-brand-border bg-brand-surface p-3">
-              <p className="font-medium">{item.category}</p>
-              <p className="text-xs text-brand-muted">
-                {item.amount} {item.currency} • {item.note}
+        <div className="space-y-3">
+          {track.demos.map((demo) => (
+            <div key={demo.id} className="rounded-lg border border-brand-border bg-brand-surface p-3">
+              <audio controls src={`/api/audio-clips/${demo.id}/stream`} className="w-full" />
+              <p className="mt-2 text-xs text-brand-muted">
+                {formatDate(demo.createdAt)} • {formatDuration(demo.duration)}
               </p>
+              <Input
+                className="mt-2"
+                value={demoNotes[demo.id] ?? demo.textNote ?? ""}
+                onChange={(event) =>
+                  setDemoNotes((prev) => ({
+                    ...prev,
+                    [demo.id]: event.target.value
+                  }))
+                }
+                placeholder="Текст к демке"
+              />
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  disabled={updatingDemoId === demo.id}
+                  onClick={async () => {
+                    setUpdatingDemoId(demo.id);
+                    await apiFetch(`/api/audio-clips/${demo.id}`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ textNote: (demoNotes[demo.id] ?? "").trim() || null })
+                    });
+                    await refetch();
+                    setUpdatingDemoId("");
+                  }}
+                >
+                  Сохранить текст
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={updatingDemoId === demo.id}
+                  onClick={async () => {
+                    setUpdatingDemoId(demo.id);
+                    await apiFetch(`/api/audio-clips/${demo.id}`, { method: "DELETE" });
+                    await refetch();
+                    setUpdatingDemoId("");
+                  }}
+                >
+                  Удалить
+                </Button>
+              </div>
             </div>
           ))}
-          {!song.budgetItems?.length && <p className="text-brand-muted">Пока нет статей бюджета.</p>}
+          {!track.demos.length && <p className="text-sm text-brand-muted">Пока нет демок. Запиши первую на вкладке SONGS.</p>}
         </div>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Участники</CardTitle>
-          <CardDescription>Люди, которые работают над песней.</CardDescription>
-        </CardHeader>
-        <div className="space-y-2 text-sm">
-          {song.members?.map((member: any) => (
-            <div key={member.userId} className="rounded-lg border border-brand-border bg-brand-surface p-3">
-              <p className="font-medium">{member.user?.name}</p>
-              <p className="text-xs text-brand-muted">{member.role}</p>
-            </div>
-          ))}
-          {!song.members?.length && <p className="text-brand-muted">Пока нет участников.</p>}
-        </div>
-      </Card>
-
-      {song.status === "READY_FOR_RELEASE" && (
-        <Card>
-          <CardHeader>
-          <CardTitle>Release Gate чек‑лист</CardTitle>
-          <CardDescription>Проверь все пункты перед релизом.</CardDescription>
-          </CardHeader>
-          <div className="space-y-2 text-sm text-slate-700">
-            <p>✅ Артворк готов</p>
-            <p>✅ Мастер готов</p>
-            <p>✅ Метаданные заполнены</p>
-            <Button variant="secondary">Отметить как релиз</Button>
-          </div>
-        </Card>
-      )}
+      <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" onClick={() => router.push("/songs")}>
+          Записать новую демку
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={async () => {
+            await apiFetch(`/api/songs/${track.id}`, { method: "DELETE" });
+            router.push("/songs");
+          }}
+        >
+          Удалить трек
+        </Button>
+      </div>
     </div>
   );
 }

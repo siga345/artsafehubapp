@@ -9,225 +9,142 @@ datasource db {
 
 enum UserRole {
   ARTIST
-  PRODUCER
-  ENGINEER
+  SPECIALIST
+  STUDIO
   ADMIN
 }
 
-enum AvailabilityStatus {
-  OPEN
-  LIMITED
-  CLOSED
-}
-
-enum SpecialistType {
+enum FindCategory {
   PRODUCER
-  ENGINEER
+  AUDIO_ENGINEER
+  RECORDING_STUDIO
+  PROMO_CREW
 }
 
-enum SongStatus {
-  IDEA_DEMO
-  WRITING
-  ARRANGEMENT
-  RECORDING
-  MIXING
-  MASTERING
-  READY_FOR_RELEASE
-  RELEASED
-  ARCHIVED
-}
-
-enum TaskStatus {
-  TODO
-  DOING
-  DONE
-}
-
-enum PathLogType {
-  NOTE
-  MILESTONE
-}
-
-enum BudgetCategory {
-  BEAT
-  STUDIO
-  MIXING
-  MASTERING
-  COVER
-  PROMO
-  OTHER
-}
-
-enum BookingStatus {
-  REQUESTED
-  CONFIRMED
-  CANCELLED
-}
-
-enum LearningType {
-  VIDEO
-  TEXT
+enum CheckInMood {
+  NORMAL
+  TOUGH
+  FLYING
 }
 
 model User {
-  id            String             @id @default(cuid())
-  email         String             @unique
-  passwordHash  String
-  name          String
-  role          UserRole           @default(ARTIST)
-  pathLevelId   Int?
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
-  artistProfile ArtistProfile?
-  specialistProfile SpecialistProfile?
-  ideas         Idea[]
-  audioClips    AudioClip[]
-  songs         Song[]
-  songMembers   SongMember[]
-  tasks         Task[]
-  pathLogs      PathProgressLog[]
-  bookings      Booking[]
-
-  pathLevel     PathLevel?         @relation(fields: [pathLevelId], references: [id])
-}
-
-model ArtistProfile {
-  userId       String   @id
-  genres       String[]
-  city         String
-  bio          String
-  links        Json
-  availability AvailabilityStatus
-  user         User     @relation(fields: [userId], references: [id])
+  id                   String           @id @default(cuid())
+  safeId               String           @unique @default(cuid())
+  email                String           @unique
+  passwordHash         String
+  nickname             String
+  avatarUrl            String?
+  links                Json?
+  role                 UserRole         @default(ARTIST)
+  notificationsEnabled Boolean          @default(true)
+  demosPrivate         Boolean          @default(true)
+  pathStageId          Int?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  pathStage            PathStage?       @relation(fields: [pathStageId], references: [id])
+  specialistProfile    SpecialistProfile?
+  folders              Folder[]
+  tracks               Track[]
+  checkIns             DailyCheckIn[]
+  weeklyActivities     WeeklyActivity[]
+  microSteps           DailyMicroStep[]
 }
 
 model SpecialistProfile {
-  userId        String   @id
-  type          SpecialistType
-  services      Json
-  portfolioLinks Json
-  priceInfo     String
-  contact       String
-  user          User     @relation(fields: [userId], references: [id])
+  userId          String       @id
+  category        FindCategory
+  city            String?
+  isOnline        Boolean      @default(true)
+  isAvailableNow  Boolean      @default(false)
+  bio             String?
+  portfolioLinks  String[]
+  budgetFrom      Int?
+  contactTelegram String?
+  contactUrl      String?
+  user            User         @relation(fields: [userId], references: [id])
 }
 
-model Idea {
+model Folder {
   id        String   @id @default(cuid())
-  ownerId   String
+  userId    String
   title     String
-  text      String
-  tags      String[]
   createdAt DateTime @default(now())
-  owner     User     @relation(fields: [ownerId], references: [id])
-  audioClips AudioClip[]
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id])
+  tracks    Track[]
+
+  @@unique([userId, title])
 }
 
-model AudioClip {
-  id          String   @id @default(cuid())
-  ownerId     String
-  ideaId      String?
-  songId      String?
-  filePath    String
-  durationSec Int
-  noteText    String
-  createdAt   DateTime @default(now())
-  owner       User     @relation(fields: [ownerId], references: [id])
-  idea        Idea?    @relation(fields: [ideaId], references: [id])
-  song        Song?    @relation(fields: [songId], references: [id])
-}
-
-model Song {
-  id          String   @id @default(cuid())
-  ownerId     String
+model Track {
+  id          String    @id @default(cuid())
+  userId      String
   title       String
+  folderId    String?
+  pathStageId Int?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation(fields: [userId], references: [id])
+  folder      Folder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  pathStage   PathStage? @relation(fields: [pathStageId], references: [id], onDelete: SetNull)
+  demos       Demo[]
+}
+
+model Demo {
+  id         String   @id @default(cuid())
+  trackId    String
+  audioUrl   String
+  textNote   String?
+  duration   Int
+  createdAt  DateTime @default(now())
+  track      Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+}
+
+model PathStage {
+  id          Int      @id @default(autoincrement())
+  order       Int      @unique
+  name        String   @unique
+  iconKey     String
   description String
-  status      SongStatus
-  bpm         Int?
-  key         String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  owner       User     @relation(fields: [ownerId], references: [id])
-  members     SongMember[]
-  tasks       Task[]
-  budgetItems SongBudgetItem[]
-  audioClips  AudioClip[]
+  users       User[]
+  tracks      Track[]
+  microSteps  DailyMicroStep[]
 }
 
-model SongMember {
-  songId  String
-  userId  String
-  role    UserRole
-  addedAt DateTime @default(now())
-  song    Song     @relation(fields: [songId], references: [id])
-  user    User     @relation(fields: [userId], references: [id])
-
-  @@id([songId, userId])
-}
-
-model Task {
-  id          String     @id @default(cuid())
-  ownerId     String
-  songId      String?
-  pathLevelId Int?
-  title       String
-  description String
-  status      TaskStatus @default(TODO)
-  dueDate     DateTime?
-  createdAt   DateTime   @default(now())
-  owner       User       @relation(fields: [ownerId], references: [id])
-  song        Song?      @relation(fields: [songId], references: [id])
-  pathLevel   PathLevel? @relation(fields: [pathLevelId], references: [id])
-}
-
-model PathLevel {
-  id               Int      @id @default(autoincrement())
-  order            Int
-  name             String
-  description      String
-  criteria         Json
-  checklistTemplate Json
-  createdAt        DateTime @default(now())
-  users            User[]
-  tasks            Task[]
-}
-
-model PathProgressLog {
+model DailyCheckIn {
   id        String     @id @default(cuid())
   userId    String
-  type      PathLogType
-  text      String
+  date      DateTime   @db.Date
+  mood      CheckInMood
+  note      String?
   createdAt DateTime   @default(now())
-  user      User       @relation(fields: [userId], references: [id])
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
 }
 
-model SongBudgetItem {
-  id        String        @id @default(cuid())
-  songId    String
-  category  BudgetCategory
-  amount    Decimal
-  currency  String        @default("RUB")
-  note      String
-  createdAt DateTime      @default(now())
-  song      Song          @relation(fields: [songId], references: [id])
+model DailyMicroStep {
+  id          String    @id @default(cuid())
+  userId      String
+  date        DateTime  @db.Date
+  pathStageId Int?
+  text        String
+  isCompleted Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pathStage   PathStage? @relation(fields: [pathStageId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, date])
 }
 
-model Booking {
-  id        String        @id @default(cuid())
-  userId    String
-  startAt   DateTime
-  endAt     DateTime
-  status    BookingStatus
-  notes     String
-  user      User          @relation(fields: [userId], references: [id])
-}
+model WeeklyActivity {
+  id            String   @id @default(cuid())
+  userId        String
+  weekStartDate DateTime @db.Date
+  activeDays    Int      @default(0)
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-model LearningItem {
-  id            String       @id @default(cuid())
-  type          LearningType
-  title         String
-  description   String
-  url           String
-  tags          String[]
-  pathLevelIds  Int[]
-  songStatuses  String[]
+  @@unique([userId, weekStartDate])
 }

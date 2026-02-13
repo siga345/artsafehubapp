@@ -1,37 +1,65 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 
+import { apiError, parseJsonBody, withApiHandler } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
-import { songSchema } from "@/lib/validators";
-import { getDemoUser } from "@/lib/demo";
+import { requireUser } from "@/lib/server-auth";
 
-export async function GET() {
-  const songs = await prisma.song.findMany({
+const createTrackSchema = z.object({
+  title: z.string().min(1).max(120),
+  folderId: z.string().optional().nullable(),
+  pathStageId: z.number().int().optional().nullable()
+});
+
+export const GET = withApiHandler(async () => {
+  const user = await requireUser();
+
+  const tracks = await prisma.track.findMany({
+    where: { userId: user.id },
     include: {
-      tasks: true,
-      budgetItems: true,
-      members: true,
-      audioClips: true
+      folder: true,
+      pathStage: true,
+      _count: { select: { demos: true } }
     },
-    orderBy: { createdAt: "desc" }
+    orderBy: { updatedAt: "desc" }
   });
 
-  return NextResponse.json(songs);
-}
+  return NextResponse.json(tracks);
+});
 
-export async function POST(request: Request) {
-  const body = songSchema.parse(await request.json());
-  const user = await getDemoUser();
+export const POST = withApiHandler(async (request: Request) => {
+  const user = await requireUser();
+  const body = await parseJsonBody(request, createTrackSchema);
 
-  const song = await prisma.song.create({
+  if (body.folderId) {
+    const folder = await prisma.folder.findFirst({
+      where: { id: body.folderId, userId: user.id }
+    });
+    if (!folder) {
+      throw apiError(403, "Cannot use this folder");
+    }
+  }
+
+  if (body.pathStageId) {
+    const stage = await prisma.pathStage.findUnique({ where: { id: body.pathStageId } });
+    if (!stage) {
+      throw apiError(400, "Invalid pathStageId");
+    }
+  }
+
+  const track = await prisma.track.create({
     data: {
-      ownerId: user.id,
-      title: body.title,
-      description: body.description,
-      status: body.status as any,
-      bpm: body.bpm ?? null,
-      key: body.key ?? null
+      userId: user.id,
+      title: body.title.trim(),
+      folderId: body.folderId ?? null,
+      pathStageId: body.pathStageId ?? null
+    },
+    include: {
+      folder: true,
+      pathStage: true,
+      _count: { select: { demos: true } }
     }
   });
 
-  return NextResponse.json(song, { status: 201 });
-}
+  return NextResponse.json(track, { status: 201 });
+});
