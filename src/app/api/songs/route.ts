@@ -8,7 +8,8 @@ import { requireUser } from "@/lib/server-auth";
 const createTrackSchema = z.object({
   title: z.string().min(1).max(120),
   folderId: z.string().optional().nullable(),
-  pathStageId: z.number().int().optional().nullable()
+  pathStageId: z.number().int().optional().nullable(),
+  lyricsText: z.string().max(10000).optional().nullable()
 });
 
 export const GET = withApiHandler(async () => {
@@ -51,6 +52,7 @@ export const POST = withApiHandler(async (request: Request) => {
     data: {
       userId: user.id,
       title: body.title.trim(),
+      lyricsText: body.lyricsText?.trim() || null,
       folderId: body.folderId ?? null,
       pathStageId: body.pathStageId ?? null
     },

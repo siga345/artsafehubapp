@@ -37,8 +37,9 @@ export const PATCH = withApiHandler(async (request: Request, { params }: { param
   return NextResponse.json(updated);
 });
 
-export const DELETE = withApiHandler(async (_: Request, { params }: { params: { id: string } }) => {
+export const DELETE = withApiHandler(async (request: Request, { params }: { params: { id: string } }) => {
   const user = await requireUser();
+  const forceDelete = new URL(request.url).searchParams.get("force") === "1";
   const folder = await prisma.folder.findFirst({
     where: { id: params.id, userId: user.id },
     include: { _count: { select: { tracks: true } } }
@@ -48,10 +49,23 @@ export const DELETE = withApiHandler(async (_: Request, { params }: { params: { 
     throw apiError(404, "Folder not found");
   }
 
-  if (folder._count.tracks > 0) {
+  if (folder._count.tracks > 0 && !forceDelete) {
     throw apiError(400, "Folder is not empty");
   }
 
-  await prisma.folder.delete({ where: { id: params.id } });
+  if (forceDelete && folder._count.tracks > 0) {
+    await prisma.$transaction([
+      prisma.track.deleteMany({
+        where: {
+          userId: user.id,
+          folderId: params.id
+        }
+      }),
+      prisma.folder.delete({ where: { id: params.id } })
+    ]);
+  } else {
+    await prisma.folder.delete({ where: { id: params.id } });
+  }
+
   return NextResponse.json({ ok: true });
 });

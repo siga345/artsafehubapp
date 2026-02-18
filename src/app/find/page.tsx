@@ -30,7 +30,7 @@ async function fetcher<T>(url: string): Promise<T> {
 }
 
 const categoryLabels: Record<string, string> = {
-  PRODUCER: "Продюсер / аранжировщик",
+  PRODUCER: "Продюсер / продакшн",
   AUDIO_ENGINEER: "Звукорежиссёр",
   RECORDING_STUDIO: "Студия звукозаписи",
   PROMO_CREW: "Промо-команда"
@@ -70,7 +70,7 @@ export default function FindPage() {
           <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Кого ищем?" />
           <Select value={category} onChange={(event) => setCategory(event.target.value)}>
             <option value="ALL">Все категории</option>
-            <option value="PRODUCER">Продюсер / аранжировщик</option>
+            <option value="PRODUCER">Продюсер / продакшн</option>
             <option value="AUDIO_ENGINEER">Звукорежиссёр</option>
             <option value="RECORDING_STUDIO">Студия</option>
             <option value="PROMO_CREW">Промо-команда</option>

@@ -1,0 +1,4 @@
+ALTER TYPE "DemoVersionType" ADD VALUE IF NOT EXISTS 'IDEA_TEXT';
+
+ALTER TABLE "Track"
+ADD COLUMN "lyricsText" TEXT;

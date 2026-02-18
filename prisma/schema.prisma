@@ -27,6 +27,15 @@ enum CheckInMood {
   FLYING
 }
 
+enum DemoVersionType {
+  IDEA_TEXT
+  DEMO
+  ARRANGEMENT
+  NO_MIX
+  MIXED
+  MASTERED
+}
+
 model User {
   id                   String           @id @default(cuid())
   safeId               String           @unique @default(cuid())
@@ -80,6 +89,7 @@ model Track {
   id          String    @id @default(cuid())
   userId      String
   title       String
+  lyricsText  String?
   folderId    String?
   pathStageId Int?
   createdAt   DateTime  @default(now())
@@ -91,13 +101,14 @@ model Track {
 }
 
 model Demo {
-  id         String   @id @default(cuid())
-  trackId    String
-  audioUrl   String
-  textNote   String?
-  duration   Int
-  createdAt  DateTime @default(now())
-  track      Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  id          String          @id @default(cuid())
+  trackId     String
+  audioUrl    String
+  textNote    String?
+  duration    Int
+  versionType DemoVersionType @default(DEMO)
+  createdAt   DateTime        @default(now())
+  track       Track           @relation(fields: [trackId], references: [id], onDelete: Cascade)
 }
 
 model PathStage {

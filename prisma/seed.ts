@@ -45,9 +45,9 @@ async function main() {
       },
       {
         order: 3,
-        name: "Производство",
+        name: "Продакшн",
         iconKey: "knobs",
-        description: "Подготовь аранжировку и продакшн-направление."
+        description: "Подготовь продакшн и направление трека."
       },
       {
         order: 4,
@@ -165,7 +165,7 @@ async function main() {
       userId: user.id,
       date: dateOnly,
       pathStageId: productionStage.id,
-      text: "Собери 3 референса для аранжировки.",
+      text: "Собери 3 референса для продакшна.",
       isCompleted: false
     }
   });

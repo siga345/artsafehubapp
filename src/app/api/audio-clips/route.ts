@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { DemoVersionType } from "@prisma/client";
 
 import { apiError, withApiHandler } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
@@ -53,6 +54,19 @@ export const POST = withApiHandler(async (request: Request) => {
     throw apiError(400, "trackId is required");
   }
 
+  const versionTypeRaw = String(formData.get("versionType") ?? "DEMO");
+  const allowedVersionTypes = new Set<DemoVersionType>([
+    "IDEA_TEXT",
+    "DEMO",
+    "ARRANGEMENT",
+    "NO_MIX",
+    "MIXED",
+    "MASTERED"
+  ]);
+  if (!allowedVersionTypes.has(versionTypeRaw as DemoVersionType)) {
+    throw apiError(400, "Invalid versionType");
+  }
+
   const track = await prisma.track.findFirst({ where: { id: trackId, userId: user.id } });
   if (!track) {
     throw apiError(403, "Cannot attach demo to this track");
@@ -67,7 +81,8 @@ export const POST = withApiHandler(async (request: Request) => {
       trackId,
       audioUrl: stored.storageKey,
       duration: Math.max(0, Math.round(durationSec)),
-      textNote: String(formData.get("noteText") ?? "") || null
+      textNote: String(formData.get("noteText") ?? "") || null,
+      versionType: versionTypeRaw as DemoVersionType
     },
     include: {
       track: {
