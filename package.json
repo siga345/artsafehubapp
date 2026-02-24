@@ -12,7 +12,9 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "ts-node --transpile-only prisma/seed.ts"
+    "prisma:seed": "ts-node --transpile-only --compiler-options \"{\\\"module\\\":\\\"CommonJS\\\",\\\"moduleResolution\\\":\\\"node\\\"}\" prisma/seed.ts",
+    "prisma:fill-find-data": "ts-node --transpile-only --compiler-options \"{\\\"module\\\":\\\"CommonJS\\\",\\\"moduleResolution\\\":\\\"node\\\"}\" prisma/fill-find-test-data.ts",
+    "demo:stage": "ts-node --transpile-only --compiler-options \"{\\\"module\\\":\\\"CommonJS\\\",\\\"moduleResolution\\\":\\\"node\\\"}\" scripts/set-demo-stage.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.18.0",

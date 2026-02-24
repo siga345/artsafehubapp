@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { withApiHandler } from "@/lib/api";
+import { canonicalizePathStage } from "@/lib/path-stages";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
 
@@ -12,5 +13,5 @@ export const GET = withApiHandler(async () => {
   const stages = await prisma.pathStage.findMany({
     orderBy: { order: "asc" }
   });
-  return NextResponse.json(stages);
+  return NextResponse.json(stages.map((stage) => canonicalizePathStage(stage)));
 });

@@ -12,11 +12,15 @@ export default function SignInPage() {
   const [password, setPassword] = useState("");
 
   return (
-    <div className="mx-auto max-w-md">
-      <Card>
+    <div className="mx-auto max-w-md space-y-4">
+      <div className="space-y-1 text-center">
+        <p className="text-xs uppercase tracking-[0.2em] text-brand-muted">ART SAFE</p>
+        <h1 className="text-3xl font-semibold tracking-tight text-brand-ink">Welcome Back</h1>
+      </div>
+      <Card className="app-glass">
         <CardHeader>
-          <CardTitle>Вход</CardTitle>
-          <CardDescription>Используйте демо‑логин из README.</CardDescription>
+          <CardTitle>Вход в рабочее пространство</CardTitle>
+          <CardDescription>Используйте демо-логин из README.</CardDescription>
         </CardHeader>
         <form
           className="space-y-3"
@@ -40,7 +44,7 @@ export default function SignInPage() {
             required
           />
           <Button type="submit" className="w-full">
-            Войти
+            Войти в ART SAFE
           </Button>
         </form>
       </Card>

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { withApiHandler } from "@/lib/api";
+import { canonicalizePathStage, getCanonicalPathStageLabel } from "@/lib/path-stages";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
 
@@ -19,12 +20,14 @@ function getWeekStart(dateOnly: Date) {
   return weekStartDate;
 }
 
+const defaultStage = getCanonicalPathStageLabel(1);
+
 const stageFallback = {
   id: 0,
   order: 1,
-  name: "Идея",
-  iconKey: "spark",
-  description: "Сформулируй, что ты хочешь сказать треком."
+  name: defaultStage?.name ?? "Искра",
+  iconKey: defaultStage?.iconKey ?? "spark",
+  description: defaultStage?.description ?? "Творческий порыв"
 };
 
 export const GET = withApiHandler(async () => {
@@ -37,7 +40,7 @@ export const GET = withApiHandler(async () => {
     include: { pathStage: true }
   });
 
-  const currentStage = currentUser?.pathStage ?? stageFallback;
+  const currentStage = currentUser?.pathStage ? canonicalizePathStage(currentUser.pathStage) : stageFallback;
 
   const [checkIn, microStep, weeklyActivity] = await Promise.all([
     prisma.dailyCheckIn.findUnique({

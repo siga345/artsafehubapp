@@ -3,12 +3,12 @@
 import { useQuery } from "@tanstack/react-query";
 import Image from "next/image";
 import { type ComponentType, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Camera, CircleDot, Clapperboard, Megaphone, Mic, Rocket, SlidersHorizontal, Sparkles, Waves } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
 
 async function fetcher<T>(url: string): Promise<T> {
   return apiFetchJson<T>(url);
@@ -43,6 +43,8 @@ const moodLabels: Record<Mood, string> = {
   FLYING: "Лечу"
 };
 
+const moodOrder: Mood[] = ["FLYING", "NORMAL", "TOUGH"];
+
 const iconMap: Record<string, ComponentType<{ className?: string }>> = {
   spark: Sparkles,
   mic: Mic,
@@ -56,17 +58,74 @@ const iconMap: Record<string, ComponentType<{ className?: string }>> = {
 };
 
 const stageImageByOrder: Record<number, string> = {
-  1: "/images/stage-1-iskra.png",
-  2: "/images/stage-2-formirovanie.png",
-  3: "/images/stage-3-vyhod-v-svet.png",
-  4: "/images/stage-4-proryv.png",
-  5: "/images/stage-5-priznanie.png",
-  6: "/images/stage-6-shirokaya-izvestnost.png",
-  7: "/images/stage-7-nasledie.png"
+  1: "/images/stage-1-iskra-symbol.png",
+  2: "/images/stage-2-formirovanie-symbol.png",
+  3: "/images/stage-3-vyhod-v-svet-symbol.png",
+  4: "/images/stage-4-proryv-symbol.png",
+  5: "/images/stage-5-priznanie-symbol.png",
+  6: "/images/stage-6-shirokaya-izvestnost-symbol.png",
+  7: "/images/stage-7-nasledie-symbol.png"
 };
 
+function getWeeklyRhythmMessage(activeDays: number) {
+  switch (activeDays) {
+    case 0:
+      return "Кажется, ты совсем ничего не делал, не поздно начать";
+    case 1:
+      return "Старт есть: 1 день активности на этой неделе.";
+    case 2:
+      return "Мягкий ритм: 2 дня активности, продолжай.";
+    case 3:
+      return "Хороший ритм: 3 дня активности, ты в процессе.";
+    case 4:
+      return "Уверенный ритм: 4 дня активности, классный темп.";
+    case 5:
+      return "Сильный ритм: 5 дней активности, почти максимум.";
+    case 6:
+      return "Почти идеально: 6 дней активности за неделю.";
+    default:
+      return "Максимум: 7 из 7 активных дней.";
+  }
+}
+
+function getStageGradientStyle(order?: number) {
+  switch (order) {
+    case 2:
+      return {
+        background:
+          "linear-gradient(135deg, rgba(203, 213, 225, 0.46) 0%, rgba(148, 163, 184, 0.32) 48%, rgba(226, 232, 240, 0.42) 100%)"
+      } as const;
+    case 3:
+      return {
+        background:
+          "linear-gradient(135deg, rgba(253, 230, 138, 0.52) 0%, rgba(250, 204, 21, 0.34) 48%, rgba(254, 249, 195, 0.48) 100%)"
+      } as const;
+    case 4:
+      return {
+        background:
+          "linear-gradient(135deg, rgba(134, 239, 172, 0.46) 0%, rgba(74, 222, 128, 0.32) 48%, rgba(220, 252, 231, 0.44) 100%)"
+      } as const;
+    case 5:
+      return {
+        background:
+          "linear-gradient(135deg, rgba(253, 186, 116, 0.50) 0%, rgba(249, 115, 22, 0.30) 48%, rgba(255, 237, 213, 0.46) 100%)"
+      } as const;
+    case 6:
+      return {
+        background:
+          "linear-gradient(135deg, rgba(125, 181, 255, 0.62) 0%, rgba(37, 99, 235, 0.54) 48%, rgba(191, 219, 254, 0.54) 100%)"
+      } as const;
+    case 7:
+      return {
+        background:
+          "linear-gradient(140deg, #ff7a7a 0%, #ff2b2b 44%, #9a1111 78%, #3a0b0b 100%)"
+      } as const;
+    default:
+      return undefined;
+  }
+}
+
 export default function TodayPage() {
-  const router = useRouter();
   const { data, refetch, isLoading } = useQuery({
     queryKey: ["home-overview"],
     queryFn: () => fetcher<HomeOverview>("/api/home/overview")
@@ -78,13 +137,9 @@ export default function TodayPage() {
 
   useEffect(() => {
     if (!data?.checkIn) return;
-    if (mood === null) {
-      setMood(data.checkIn.mood);
-    }
-    if (!note) {
-      setNote(data.checkIn.note ?? "");
-    }
-  }, [data?.checkIn, mood, note]);
+    setMood(data.checkIn.mood);
+    setNote(data.checkIn.note ?? "");
+  }, [data?.checkIn]);
 
   const selectedMood = mood ?? data?.checkIn?.mood ?? null;
   const noteValue = note;
@@ -93,34 +148,42 @@ export default function TodayPage() {
     const key = data?.stage.iconKey ?? "spark";
     return iconMap[key] ?? Sparkles;
   }, [data?.stage.iconKey]);
+  const isSeventhStage = data?.stage?.order === 7;
+  const stageGradientStyle = getStageGradientStyle(data?.stage?.order);
   const activeDays = Math.max(0, Math.min(7, data?.weeklyActiveDays ?? 0));
+  const isCheckInLocked = Boolean(data?.checkIn);
+  const weeklyRhythmMessage = getWeeklyRhythmMessage(activeDays);
   const hasMicroStep = Boolean(data?.microStep);
 
   return (
     <div className="space-y-6">
-      <Card>
+      <Card style={stageGradientStyle} className={isSeventhStage ? "border-[#7f0000]" : undefined}>
         <CardHeader>
-          <CardTitle>PATH</CardTitle>
-          <CardDescription>Твой центр ежедневного движения по этапам.</CardDescription>
+          <CardTitle className={isSeventhStage ? "text-3xl text-white" : "text-3xl"}>PATH</CardTitle>
+          <CardDescription className={isSeventhStage ? "text-white/85" : undefined}>
+            Твой центр ежедневного движения по этапам.
+          </CardDescription>
         </CardHeader>
         <div className="flex flex-col items-center gap-4 text-center">
-          <div className="relative flex h-48 w-48 items-center justify-center overflow-hidden rounded-full border-4 border-brand-border bg-white">
-            {stageImageSrc ? (
-              <Image
-                src={stageImageSrc}
-                alt={data?.stage?.name ? `Этап PATH: ${data.stage.name}` : "Текущий этап PATH"}
-                fill
-                sizes="192px"
-                className="object-cover"
-                priority
-              />
-            ) : (
-              <StageIcon className="h-16 w-16 text-brand-ink" />
-            )}
+          <div className="relative flex h-72 w-full items-center justify-center">
+            <div className="relative z-20 flex h-72 w-72 translate-y-6 items-center justify-center">
+              {stageImageSrc ? (
+                <Image
+                  src={stageImageSrc}
+                  alt={data?.stage?.name ? `Этап PATH: ${data.stage.name}` : "Текущий этап PATH"}
+                  fill
+                  sizes="288px"
+                  className={`object-contain scale-[1.72] ${isSeventhStage ? "invert brightness-[2.2] contrast-[1.15]" : ""}`}
+                  priority
+                />
+              ) : (
+                <StageIcon className={`h-44 w-44 ${isSeventhStage ? "text-white" : "text-brand-ink"}`} />
+              )}
+            </div>
           </div>
           <div className="space-y-1">
-            <p className="text-2xl font-semibold">{isLoading ? "Загрузка..." : data?.stage.name}</p>
-            <p className="text-sm text-brand-muted">{data?.stage.description}</p>
+            <p className={`text-2xl font-semibold ${isSeventhStage ? "text-white" : ""}`}>{isLoading ? "Загрузка..." : data?.stage.name}</p>
+            <p className={`text-sm ${isSeventhStage ? "text-white/85" : "text-brand-muted"}`}>{data?.stage.description}</p>
           </div>
         </div>
       </Card>
@@ -128,44 +191,47 @@ export default function TodayPage() {
       <Card>
         <CardHeader>
           <CardTitle>Сегодня</CardTitle>
-          <CardDescription>Как ты сегодня? Отметь состояние и добавь короткую заметку.</CardDescription>
+          <CardDescription>Как ты сегодня? Отметь своё состояние и творческую деятельность</CardDescription>
         </CardHeader>
         <div className="space-y-3">
           <div className="flex flex-wrap gap-2">
-            {(Object.keys(moodLabels) as Mood[]).map((item) => (
+            {moodOrder.map((item) => (
               <Button
                 key={item}
                 variant={selectedMood === item ? "primary" : "secondary"}
+                disabled={isCheckInLocked || isSaving}
                 onClick={() => setMood(item)}
               >
                 {moodLabels[item]}
               </Button>
             ))}
           </div>
-          <textarea
+          <Textarea
             value={noteValue}
             onChange={(event) => setNote(event.target.value)}
             placeholder="Пара слов о состоянии (опционально)"
             rows={3}
-            className="w-full rounded-md border border-brand-border px-3 py-2 text-sm outline-none focus:border-brand-accent"
+            readOnly={isCheckInLocked}
+            disabled={isCheckInLocked || isSaving}
+            className={isCheckInLocked ? "text-brand-muted" : undefined}
           />
           <Button
-            disabled={!selectedMood || isSaving}
+            variant={isCheckInLocked ? "secondary" : "primary"}
+            className={isCheckInLocked ? "text-brand-muted" : undefined}
+            disabled={isCheckInLocked || !selectedMood || isSaving}
             onClick={async () => {
-              if (!selectedMood) return;
+              if (!selectedMood || isCheckInLocked) return;
               setIsSaving(true);
               await apiFetch("/api/home/check-in", {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ mood: selectedMood, note: noteValue.trim() || null })
               });
-              setNote("");
-              setMood(null);
               await refetch();
               setIsSaving(false);
             }}
           >
-            {isSaving ? "Сохраняем..." : "Сохранить чек-ин"}
+            {isCheckInLocked ? "Сохранено" : isSaving ? "Сохраняем..." : "Сохранить чек-ин"}
           </Button>
         </div>
       </Card>
@@ -212,14 +278,14 @@ export default function TodayPage() {
       <Card>
         <CardHeader>
           <CardTitle>Прогресс недели</CardTitle>
-          <CardDescription>Мягкий ритм: от 0 до 7 активных дней.</CardDescription>
+          <CardDescription>{weeklyRhythmMessage}</CardDescription>
         </CardHeader>
         <div className="space-y-3">
           <div className="grid grid-cols-7 gap-2">
             {Array.from({ length: 7 }).map((_, index) => (
               <div
                 key={index}
-                className={`h-4 rounded-sm ${index < activeDays ? "bg-brand-ink" : "bg-slate-200"}`}
+                className={`h-4 rounded-sm ${index < activeDays ? "bg-[#2A342C]" : "bg-[#dce6cf]"}`}
               />
             ))}
           </div>
@@ -227,20 +293,6 @@ export default function TodayPage() {
         </div>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Быстрые действия</CardTitle>
-          <CardDescription>Сразу переходи к ключевым ежедневным шагам.</CardDescription>
-        </CardHeader>
-        <div className="flex flex-wrap gap-3">
-          <Button variant="secondary" onClick={() => router.push("/songs")}>
-            Записать демо
-          </Button>
-          <Button variant="secondary" onClick={() => router.push("/find")}>
-            Найти специалиста
-          </Button>
-        </div>
-      </Card>
     </div>
   );
 }

@@ -7,9 +7,156 @@
 }
 
 body {
-  @apply bg-brand-surface text-brand-ink;
+  @apply min-h-screen bg-brand-surface text-brand-ink antialiased;
+  background-color: #f7f9e3;
+}
+
+::selection {
+  background: rgba(42, 52, 44, 0.28);
+  color: #1f2f29;
 }
 
 .prose-mvp {
-  @apply text-sm leading-relaxed text-slate-700;
+  @apply text-sm leading-relaxed text-brand-muted;
+}
+
+.app-glass {
+  @apply rounded-3xl border border-brand-border bg-white/80 shadow-[0_10px_36px_rgba(55,74,61,0.12)] backdrop-blur-md;
+}
+
+.app-pill {
+  @apply rounded-full border border-brand-border bg-white/70 text-brand-ink;
+}
+
+.app-checkbox {
+  -webkit-appearance: none;
+  appearance: none;
+  display: inline-grid;
+  height: 1.2rem;
+  width: 1.2rem;
+  place-content: center;
+  border-radius: 0.45rem;
+  border: 1.5px solid #c9d2be;
+  background: #fff;
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.app-checkbox::after {
+  content: "";
+  height: 0.35rem;
+  width: 0.65rem;
+  border-bottom: 2px solid #fff;
+  border-left: 2px solid #fff;
+  transform: translateY(-0.03rem) rotate(-45deg) scale(0);
+  transform-origin: center;
+  transition: transform 0.14s ease;
+}
+
+.app-checkbox:checked {
+  border-color: #2a342c;
+  background: #2a342c;
+  box-shadow: 0 0 0 3px rgba(42, 52, 44, 0.18);
+}
+
+.app-checkbox:checked::after {
+  transform: translateY(-0.03rem) rotate(-45deg) scale(1);
+}
+
+.app-checkbox:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(42, 52, 44, 0.22);
+}
+
+@keyframes stage-circle-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(42, 52, 44, 0.16),
+      0 0 12px rgba(42, 52, 44, 0.16),
+      0 0 24px rgba(42, 52, 44, 0.1);
+    opacity: 0.44;
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(42, 52, 44, 0.22),
+      0 0 18px rgba(42, 52, 44, 0.22),
+      0 0 34px rgba(42, 52, 44, 0.14);
+    opacity: 0.7;
+  }
+}
+
+.stage-circle-glow {
+  animation: stage-circle-glow 3.6s ease-in-out infinite;
+  background: transparent;
+  will-change: opacity, box-shadow;
+}
+
+@keyframes stage-circle-glow-gold {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(176, 137, 42, 0.36),
+      0 0 14px rgba(214, 170, 57, 0.34),
+      0 0 28px rgba(232, 194, 92, 0.22);
+    opacity: 0.55;
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(176, 137, 42, 0.55),
+      0 0 22px rgba(214, 170, 57, 0.5),
+      0 0 42px rgba(232, 194, 92, 0.34);
+    opacity: 0.88;
+  }
+}
+
+.stage-circle-glow--gold {
+  animation-name: stage-circle-glow-gold;
+}
+
+@keyframes stage-circle-glow-blue {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(55, 112, 194, 0.34),
+      0 0 14px rgba(77, 149, 242, 0.34),
+      0 0 28px rgba(112, 171, 247, 0.22);
+    opacity: 0.55;
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(55, 112, 194, 0.5),
+      0 0 22px rgba(77, 149, 242, 0.5),
+      0 0 40px rgba(112, 171, 247, 0.32);
+    opacity: 0.88;
+  }
+}
+
+.stage-circle-glow--blue {
+  animation-name: stage-circle-glow-blue;
+}
+
+@keyframes stage-circle-glow-green {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(68, 140, 82, 0.35),
+      0 0 14px rgba(97, 182, 113, 0.34),
+      0 0 30px rgba(132, 205, 144, 0.24);
+    opacity: 0.58;
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(68, 140, 82, 0.52),
+      0 0 22px rgba(97, 182, 113, 0.52),
+      0 0 44px rgba(132, 205, 144, 0.36);
+    opacity: 0.9;
+  }
+}
+
+.stage-circle-glow--green {
+  animation-name: stage-circle-glow-green;
 }

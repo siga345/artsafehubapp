@@ -77,6 +77,12 @@ export default function IdPage() {
 
   return (
     <div className="space-y-6">
+      <section className="app-glass space-y-2 p-4 md:p-6">
+        <p className="text-xs uppercase tracking-[0.18em] text-brand-muted">Artist Identity</p>
+        <h1 className="text-3xl font-semibold tracking-tight text-brand-ink">SAFE ID</h1>
+        <p className="text-sm text-brand-muted">Профиль, ссылки и приватность в едином компактном экране.</p>
+      </section>
+
       <Card>
         <CardHeader>
           <CardTitle>ID</CardTitle>
@@ -95,7 +101,7 @@ export default function IdPage() {
           </div>
           <Input value={currentNickname} onChange={(event) => setNickname(event.target.value)} placeholder="Ник артиста" />
           <Input value={currentAvatarUrl} onChange={(event) => setAvatarUrl(event.target.value)} placeholder="Ссылка на аватар (URL)" />
-          <div className="rounded-lg border border-brand-border bg-brand-surface p-3">
+          <div className="rounded-xl border border-brand-border bg-white p-3">
             <p className="text-xs text-brand-muted">SAFE ID</p>
             <p className="text-sm font-semibold">{safeId}</p>
           </div>
@@ -123,17 +129,19 @@ export default function IdPage() {
           <CardDescription>Базовые настройки MVP.</CardDescription>
         </CardHeader>
         <div className="space-y-3 text-sm">
-          <label className="flex items-center gap-2">
+          <label className="flex items-center gap-2 rounded-xl border border-brand-border bg-white px-3 py-2">
             <input
               type="checkbox"
+              className="app-checkbox"
               checked={currentNotifications}
               onChange={(event) => setNotificationsEnabled(event.target.checked)}
             />
             Уведомления включены
           </label>
-          <label className="flex items-center gap-2">
+          <label className="flex items-center gap-2 rounded-xl border border-brand-border bg-white px-3 py-2">
             <input
               type="checkbox"
+              className="app-checkbox"
               checked={currentDemosPrivate}
               onChange={(event) => setDemosPrivate(event.target.checked)}
             />

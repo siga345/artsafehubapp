@@ -1,0 +1,4 @@
+ALTER TABLE "SpecialistProfile"
+ADD COLUMN "metro" TEXT,
+ADD COLUMN "services" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+ADD COLUMN "credits" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

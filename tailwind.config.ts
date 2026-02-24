@@ -5,11 +5,11 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        "brand-ink": "#0F172A",
-        "brand-muted": "#94A3B8",
-        "brand-surface": "#F8FAFC",
-        "brand-border": "#E2E8F0",
-        "brand-accent": "#6366F1"
+        "brand-ink": "#20322B",
+        "brand-muted": "#6F7F73",
+        "brand-surface": "#F7F9E3",
+        "brand-border": "#C9D2BE",
+        "brand-accent": "#2A342C"
       }
     }
   },

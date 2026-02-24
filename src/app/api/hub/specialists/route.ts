@@ -55,7 +55,10 @@ export const GET = withApiHandler(async (request: Request) => {
         ? {
             OR: [
               { nickname: { contains: query, mode: "insensitive" } },
-              { specialistProfile: { is: { bio: { contains: query, mode: "insensitive" } } } }
+              { specialistProfile: { is: { bio: { contains: query, mode: "insensitive" } } } },
+              { specialistProfile: { is: { metro: { contains: query, mode: "insensitive" } } } },
+              { specialistProfile: { is: { services: { has: query } } } },
+              { specialistProfile: { is: { credits: { has: query } } } }
             ]
           }
         : {})
@@ -68,13 +71,16 @@ export const GET = withApiHandler(async (request: Request) => {
         select: {
           category: true,
           city: true,
+          metro: true,
           isOnline: true,
           isAvailableNow: true,
           bio: true,
           budgetFrom: true,
           contactTelegram: true,
           contactUrl: true,
-          portfolioLinks: true
+          portfolioLinks: true,
+          services: true,
+          credits: true
         }
       }
     },

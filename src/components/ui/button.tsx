@@ -3,10 +3,10 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = {
-  base: "inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors",
-  primary: "bg-brand-ink text-white hover:bg-slate-900",
-  secondary: "border border-brand-border bg-white text-brand-ink hover:bg-slate-50",
-  ghost: "text-brand-ink hover:bg-slate-100"
+  base: "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium tracking-tight transition-colors disabled:cursor-not-allowed disabled:opacity-55",
+  primary: "bg-[#2A342C] text-white hover:bg-[#1F2822]",
+  secondary: "border border-brand-border bg-white text-brand-ink hover:bg-[#f2f5eb]",
+  ghost: "text-brand-ink hover:bg-[#eef3e6]"
 };
 
 export type ButtonVariant = keyof typeof buttonVariants;

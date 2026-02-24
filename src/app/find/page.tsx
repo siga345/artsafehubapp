@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { apiFetchJson } from "@/lib/client-fetch";
 
 type Specialist = {
@@ -16,13 +17,44 @@ type Specialist = {
   specialistProfile?: {
     category?: string;
     city?: string | null;
+    metro?: string | null;
     isOnline?: boolean;
     isAvailableNow?: boolean;
     budgetFrom?: number | null;
     bio?: string | null;
     contactTelegram?: string | null;
     contactUrl?: string | null;
+    services?: string[];
+    credits?: string[];
   } | null;
+};
+
+type SongTrack = {
+  id: string;
+  title: string;
+};
+
+type DemoVersionType = "IDEA_TEXT" | "DEMO" | "ARRANGEMENT" | "NO_MIX" | "MIXED" | "MASTERED";
+
+type SongVersion = {
+  id: string;
+  audioUrl: string;
+  versionType: DemoVersionType;
+  createdAt: string;
+};
+
+type TrackWithVersions = {
+  id: string;
+  demos: SongVersion[];
+};
+
+const versionTypeLabels: Record<DemoVersionType, string> = {
+  IDEA_TEXT: "Идея (текст)",
+  DEMO: "Демо",
+  ARRANGEMENT: "Продакшн",
+  NO_MIX: "Запись без сведения",
+  MIXED: "Сведение",
+  MASTERED: "Мастеринг"
 };
 
 async function fetcher<T>(url: string): Promise<T> {
@@ -43,6 +75,19 @@ export default function FindPage() {
   const [city, setCity] = useState("");
   const [availableNow, setAvailableNow] = useState(false);
 
+  const [bookingTarget, setBookingTarget] = useState<Specialist | null>(null);
+  const [bookingDate, setBookingDate] = useState("");
+  const [bookingTime, setBookingTime] = useState("");
+  const [bookingComment, setBookingComment] = useState("");
+
+  const [songTarget, setSongTarget] = useState<Specialist | null>(null);
+  const [selectedTrackId, setSelectedTrackId] = useState("");
+  const [selectedVersionId, setSelectedVersionId] = useState("");
+  const [selectedService, setSelectedService] = useState("");
+  const [songComment, setSongComment] = useState("");
+
+  const [feedback, setFeedback] = useState<string | null>(null);
+
   const requestUrl = useMemo(() => {
     const params = new URLSearchParams();
     if (query.trim()) params.set("q", query.trim());
@@ -57,14 +102,91 @@ export default function FindPage() {
     queryKey: ["find-specialists", requestUrl],
     queryFn: () => fetcher<Specialist[]>(requestUrl)
   });
+
+  const { data: tracks } = useQuery({
+    queryKey: ["find-track-options"],
+    queryFn: async () => {
+      const items = await fetcher<SongTrack[]>("/api/songs");
+      return items.map((track) => ({ id: track.id, title: track.title }));
+    },
+    enabled: Boolean(songTarget)
+  });
+
+  const { data: selectedTrack } = useQuery({
+    queryKey: ["find-track-versions", selectedTrackId],
+    queryFn: () => fetcher<TrackWithVersions>(`/api/songs/${selectedTrackId}`),
+    enabled: Boolean(songTarget && selectedTrackId)
+  });
+
+  const availableVersions = useMemo(
+    () =>
+      (selectedTrack?.demos ?? []).filter(
+        (demo) => demo.versionType !== "IDEA_TEXT" && Boolean(demo.audioUrl?.trim())
+      ),
+    [selectedTrack?.demos]
+  );
+
   const filtered = specialists ?? [];
+
+  function openStudioBookingModal(item: Specialist) {
+    setSongTarget(null);
+    setBookingTarget(item);
+    setBookingDate("");
+    setBookingTime("");
+    setBookingComment("");
+    setFeedback(null);
+  }
+
+  function openSendSongModal(item: Specialist) {
+    const services = item.specialistProfile?.services ?? [];
+    setBookingTarget(null);
+    setSongTarget(item);
+    setSelectedTrackId("");
+    setSelectedVersionId("");
+    setSelectedService(services[0] ?? "");
+    setSongComment("");
+    setFeedback(null);
+  }
+
+  function closeModals() {
+    setBookingTarget(null);
+    setSongTarget(null);
+  }
+
+  function handleStudioBookingSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!bookingTarget) return;
+
+    setFeedback(`Запрос на бронь в ${bookingTarget.nickname} сформирован.`);
+    closeModals();
+  }
+
+  function handleSendSongSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!songTarget || !selectedTrackId || !selectedVersionId || !selectedService) return;
+
+    const trackTitle = tracks?.find((track) => track.id === selectedTrackId)?.title ?? "Выбранный трек";
+    setFeedback(`Файл из трека \"${trackTitle}\" отправлен ${songTarget.nickname} на услугу \"${selectedService}\".`);
+    closeModals();
+  }
 
   return (
     <div className="space-y-6">
+      <section className="app-glass space-y-2 p-4 md:p-6">
+        <h1 className="text-3xl font-semibold tracking-tight text-brand-ink">FIND</h1>
+        <p className="text-sm text-brand-muted">Ищи продюсеров, инженеров и студии по задаче и формату работы.</p>
+      </section>
+
+      {feedback && (
+        <Card className="rounded-2xl border-emerald-200 bg-emerald-50/90">
+          <p className="text-sm text-emerald-800">{feedback}</p>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
-          <CardTitle>FIND</CardTitle>
-          <CardDescription>Поиск специалистов и студий по текущей задаче PATH.</CardDescription>
+          <CardTitle>Поиск специалистов</CardTitle>
+          <CardDescription>Фильтры для студий и специалистов.</CardDescription>
         </CardHeader>
         <div className="grid gap-3 md:grid-cols-5">
           <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Кого ищем?" />
@@ -81,9 +203,10 @@ export default function FindPage() {
             <option value="CITY">Только в городе / офлайн</option>
           </Select>
           <Input value={city} onChange={(event) => setCity(event.target.value)} placeholder="Город (опционально)" />
-          <label className="flex items-center gap-2 rounded-md border border-brand-border px-3 py-2 text-sm">
+          <label className="flex items-center gap-2 rounded-xl border border-brand-border bg-white px-3 py-2 text-sm text-brand-ink">
             <input
               type="checkbox"
+              className="app-checkbox"
               checked={availableNow}
               onChange={(event) => setAvailableNow(event.target.checked)}
             />
@@ -95,11 +218,12 @@ export default function FindPage() {
       <div className="grid gap-4 md:grid-cols-2">
         {filtered.map((item) => {
           const profile = item.specialistProfile;
-          const contact = profile?.contactTelegram ?? profile?.contactUrl ?? "";
-          const canContact = Boolean(contact);
+          const isStudio = profile?.category === "RECORDING_STUDIO";
+          const services = profile?.services ?? [];
+          const credits = profile?.credits ?? [];
 
           return (
-            <Card key={item.id}>
+            <Card key={item.id} className="space-y-3">
               <CardHeader>
                 <CardTitle>{item.nickname}</CardTitle>
                 <CardDescription>
@@ -107,23 +231,37 @@ export default function FindPage() {
                   {profile?.isOnline ? "Онлайн" : profile?.city ?? "Офлайн"}
                 </CardDescription>
               </CardHeader>
+
               <div className="space-y-2 text-sm text-brand-muted">
                 <p>SAFE ID: {item.safeId}</p>
-                <p>{profile?.bio ?? "Описание пока не добавлено."}</p>
-                <p>
-                  {profile?.isAvailableNow ? "Доступен сейчас" : "Сейчас занят"} •{" "}
-                  {profile?.budgetFrom ? `от ${profile.budgetFrom}` : "бюджет по запросу"}
-                </p>
-                <Button
-                  variant="secondary"
-                  disabled={!canContact}
-                  onClick={() => {
-                    if (!canContact) return;
-                    window.open(contact, "_blank", "noopener,noreferrer");
-                  }}
-                >
-                  Связаться
-                </Button>
+
+                {isStudio ? (
+                  <>
+                    <p>Город: {profile?.city ?? "Не указан"}</p>
+                    <p>Метро: {profile?.metro ?? "Не указано"}</p>
+                    <p>Услуги: {services.length ? services.join(", ") : "По запросу"}</p>
+                    <p>
+                      {profile?.isAvailableNow ? "Доступна сейчас" : "Сейчас занята"} •{" "}
+                      {profile?.budgetFrom ? `от ${profile.budgetFrom} ₽/ч` : "цена по запросу"}
+                    </p>
+                    <Button variant="secondary" onClick={() => openStudioBookingModal(item)}>
+                      Забронировать
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p>Город: {profile?.city ?? "Не указан"}</p>
+                    <p>Услуги: {services.length ? services.join(", ") : "По запросу"}</p>
+                    <p>Credits: {credits.length ? credits.join(", ") : "Не указаны"}</p>
+                    <p>
+                      {profile?.isAvailableNow ? "Доступен сейчас" : "Сейчас занят"} •{" "}
+                      {profile?.budgetFrom ? `от ${profile.budgetFrom}` : "бюджет по запросу"}
+                    </p>
+                    <Button variant="secondary" onClick={() => openSendSongModal(item)}>
+                      Отправить песню
+                    </Button>
+                  </>
+                )}
               </div>
             </Card>
           );
@@ -131,6 +269,126 @@ export default function FindPage() {
       </div>
 
       {filtered.length === 0 && <p className="text-sm text-brand-muted">Пока нет совпадений по фильтрам.</p>}
+
+      {(bookingTarget || songTarget) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Закрыть окно"
+            className="absolute inset-0 bg-black/45"
+            onClick={closeModals}
+          />
+
+          {bookingTarget && (
+            <Card className="relative z-10 w-full max-w-lg rounded-2xl bg-white">
+              <CardHeader>
+                <CardTitle>Бронирование студии</CardTitle>
+                <CardDescription>{bookingTarget.nickname}</CardDescription>
+              </CardHeader>
+
+              <form className="space-y-3" onSubmit={handleStudioBookingSubmit}>
+                <Input type="date" value={bookingDate} onChange={(event) => setBookingDate(event.target.value)} required />
+                <Input type="time" value={bookingTime} onChange={(event) => setBookingTime(event.target.value)} required />
+                <Textarea
+                  value={bookingComment}
+                  onChange={(event) => setBookingComment(event.target.value)}
+                  placeholder="Комментарий к брони (опционально)"
+                  rows={4}
+                />
+
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="ghost" onClick={closeModals}>
+                    Отмена
+                  </Button>
+                  <Button type="submit">Перейти к брони</Button>
+                </div>
+              </form>
+            </Card>
+          )}
+
+          {songTarget && (
+            <Card className="relative z-10 w-full max-w-lg rounded-2xl bg-white">
+              <CardHeader>
+                <CardTitle>Отправить песню специалисту</CardTitle>
+                <CardDescription>{songTarget.nickname}</CardDescription>
+              </CardHeader>
+
+              <form className="space-y-3" onSubmit={handleSendSongSubmit}>
+                <Select
+                  value={selectedTrackId}
+                  onChange={(event) => {
+                    setSelectedTrackId(event.target.value);
+                    setSelectedVersionId("");
+                  }}
+                  required
+                >
+                  <option value="">Выберите песню</option>
+                  {!tracks?.length && <option value="">Сначала добавьте трек во вкладке SONGS</option>}
+                  {tracks?.map((track) => (
+                    <option key={track.id} value={track.id}>
+                      {track.title}
+                    </option>
+                  ))}
+                </Select>
+
+                <Select
+                  value={selectedVersionId}
+                  onChange={(event) => setSelectedVersionId(event.target.value)}
+                  required
+                  disabled={!selectedTrackId}
+                >
+                  <option value="">
+                    {!selectedTrackId
+                      ? "Сначала выберите песню"
+                      : availableVersions.length
+                        ? "Выберите версию (файл)"
+                        : "У выбранной песни нет файловых версий"}
+                  </option>
+                  {availableVersions.map((version) => (
+                    <option key={version.id} value={version.id}>
+                      {versionTypeLabels[version.versionType]} • {new Date(version.createdAt).toLocaleDateString("ru-RU")}
+                    </option>
+                  ))}
+                </Select>
+
+                <Select value={selectedService} onChange={(event) => setSelectedService(event.target.value)} required>
+                  {!songTarget.specialistProfile?.services?.length && <option value="">Услуги специалиста не заполнены</option>}
+                  {(songTarget.specialistProfile?.services ?? []).map((service) => (
+                    <option key={service} value={service}>
+                      {service}
+                    </option>
+                  ))}
+                </Select>
+
+                <Textarea
+                  value={songComment}
+                  onChange={(event) => setSongComment(event.target.value)}
+                  placeholder="Комментарии к работе, референсы"
+                  rows={4}
+                />
+
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="ghost" onClick={closeModals}>
+                    Отмена
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={
+                      !tracks?.length ||
+                      !songTarget.specialistProfile?.services?.length ||
+                      !selectedTrackId ||
+                      !selectedVersionId ||
+                      !selectedService
+                    }
+                  >
+                    Отправить песню
+                  </Button>
+                </div>
+              </form>
+            </Card>
+          )}
+        </div>
+      )}
     </div>
   );
 }

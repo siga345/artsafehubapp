@@ -76,22 +76,44 @@ export const POST = withApiHandler(async (request: Request) => {
   const filename = normalizeUploadFilename(file.name);
   const stored = await storageProvider.saveFile({ buffer, filename });
 
-  const clip = await prisma.demo.create({
-    data: {
-      trackId,
-      audioUrl: stored.storageKey,
-      duration: Math.max(0, Math.round(durationSec)),
-      textNote: String(formData.get("noteText") ?? "") || null,
-      versionType: versionTypeRaw as DemoVersionType
-    },
-    include: {
-      track: {
-        select: {
-          id: true,
-          title: true
+  const clip = await prisma.$transaction(async (tx) => {
+    await tx.demo.updateMany({
+      where: { trackId, versionType: versionTypeRaw as DemoVersionType },
+      data: { sortIndex: { increment: 1 } }
+    });
+
+    const createdClip = await tx.demo.create({
+      data: {
+        trackId,
+        audioUrl: stored.storageKey,
+        duration: Math.max(0, Math.round(durationSec)),
+        textNote: String(formData.get("noteText") ?? "") || null,
+        versionType: versionTypeRaw as DemoVersionType,
+        sortIndex: 0
+      },
+      include: {
+        track: {
+          select: {
+            id: true,
+            title: true
+          }
         }
       }
+    });
+
+    await tx.track.update({
+      where: { id: trackId },
+      data: { updatedAt: new Date() }
+    });
+
+    if (track.projectId) {
+      await tx.project.update({
+        where: { id: track.projectId },
+        data: { updatedAt: new Date() }
+      });
     }
+
+    return createdClip;
   });
 
   return NextResponse.json(clip, { status: 201 });

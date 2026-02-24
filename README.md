@@ -67,6 +67,26 @@ npm run dev
 - **Email:** demo@artsafehub.app
 - **Password:** demo1234
 
+### Смена этапа демо-профиля
+Команда для смены этапа PATH у демо-пользователя:
+
+```bash
+npm run demo:stage -- <stageOrder|stageName> [email]
+```
+
+Примеры:
+
+```bash
+# сменить этап demo@artsafehub.app по порядковому номеру этапа
+npm run demo:stage -- 2
+
+# сменить этап по названию
+npm run demo:stage -- "Наследие"
+
+# сменить этап для другого пользователя
+npm run demo:stage -- 4 user@example.com
+```
+
 ## Prisma и миграции
 - Схема: `prisma/schema.prisma`
 - Начальная миграция: `prisma/migrations/0001_init`

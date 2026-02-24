@@ -1,20 +1,8 @@
-import { PrismaClient, type FindCategory, type UserRole } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { findTestProfiles } from "./test-find-profiles";
 
 const prisma = new PrismaClient();
-type SpecialistSeedUser = {
-  email: string;
-  nickname: string;
-  safeId: string;
-  role: UserRole;
-  category: FindCategory;
-  city: string;
-  isOnline: boolean;
-  isAvailableNow: boolean;
-  budgetFrom: number;
-  contactTelegram?: string;
-  contactUrl?: string;
-};
 
 async function main() {
   const passwordHash = await bcrypt.hash("demo1234", 10);
@@ -33,66 +21,55 @@ async function main() {
     data: [
       {
         order: 1,
-        name: "Идея",
+        name: "Искра",
         iconKey: "spark",
-        description: "Зафиксируй ядро трека: тема, эмоция и хук."
+        description: "Творческий порыв"
       },
       {
         order: 2,
-        name: "Демо",
+        name: "Формирование",
         iconKey: "mic",
-        description: "Собери первые демки и черновой вайб песни."
+        description: "Становление бренда"
       },
       {
         order: 3,
-        name: "Продакшн",
+        name: "Выход в свет",
         iconKey: "knobs",
-        description: "Подготовь продакшн и направление трека."
+        description: "Первые успехи"
       },
       {
         order: 4,
-        name: "Запись",
+        name: "Прорыв",
         iconKey: "record",
-        description: "Запиши вокал и ключевые дорожки."
+        description: "Закрепление влияния"
       },
       {
         order: 5,
-        name: "Сведение",
+        name: "Признание",
         iconKey: "sliders",
-        description: "Собери цельный микс с нужным балансом."
+        description: "Стабильная аудитория"
       },
       {
         order: 6,
-        name: "Мастеринг",
+        name: "Широкая известность",
         iconKey: "wave",
-        description: "Подготовь финальный мастер для площадок."
+        description: "Медийный масштаб"
       },
       {
         order: 7,
-        name: "Релиз",
+        name: "Наследие",
         iconKey: "rocket",
-        description: "Выпусти трек и опубликуй на площадках."
-      },
-      {
-        order: 8,
-        name: "Промо-съёмка",
-        iconKey: "camera",
-        description: "Сними и подготовь промо-контент."
-      },
-      {
-        order: 9,
-        name: "Выпуск промо",
-        iconKey: "megaphone",
-        description: "Запусти промо и поддержи релиз активностями."
+        description: "Культурное влияние"
       }
     ]
   });
 
   const stages = await prisma.pathStage.findMany({ orderBy: { order: "asc" } });
-  const ideaStage = stages.find((stage: { order: number }) => stage.order === 1);
-  const demoStage = stages.find((stage: { order: number }) => stage.order === 2);
-  const productionStage = stages.find((stage: { order: number }) => stage.order === 3);
-  if (!ideaStage || !demoStage || !productionStage) {
+  const sparkStage = stages.find((stage: { order: number }) => stage.order === 1);
+  const formationStage = stages.find((stage: { order: number }) => stage.order === 2);
+  const firstSuccessStage = stages.find((stage: { order: number }) => stage.order === 3);
+  const breakthroughStage = stages.find((stage: { order: number }) => stage.order === 4);
+  if (!sparkStage || !formationStage || !firstSuccessStage || !breakthroughStage) {
     throw new Error("Required PATH stages are missing after seed setup.");
   }
 
@@ -103,7 +80,7 @@ async function main() {
       nickname: "Demo Artist",
       safeId: "SAFE-DEMO-001",
       role: "ARTIST",
-      pathStageId: ideaStage.id,
+      pathStageId: breakthroughStage.id,
       links: {
         telegram: "https://t.me/demo_artist",
         youtube: "https://youtube.com/@demoartist"
@@ -123,7 +100,7 @@ async function main() {
       userId: user.id,
       folderId: folder.id,
       title: "Night Ride",
-      pathStageId: demoStage.id
+      pathStageId: formationStage.id
     }
   });
 
@@ -164,7 +141,7 @@ async function main() {
     data: {
       userId: user.id,
       date: dateOnly,
-      pathStageId: productionStage.id,
+      pathStageId: firstSuccessStage.id,
       text: "Собери 3 референса для продакшна.",
       isCompleted: false
     }
@@ -178,46 +155,7 @@ async function main() {
     }
   });
 
-  const specialistUsers: SpecialistSeedUser[] = [
-    {
-      email: "producer@artsafehub.app",
-      nickname: "Misha Prod",
-      safeId: "SAFE-SP-001",
-      role: "SPECIALIST",
-      category: "PRODUCER",
-      city: "Москва",
-      isOnline: true,
-      isAvailableNow: true,
-      budgetFrom: 15000,
-      contactTelegram: "https://t.me/misha_prod"
-    },
-    {
-      email: "engineer@artsafehub.app",
-      nickname: "Lena Mix",
-      safeId: "SAFE-SP-002",
-      role: "SPECIALIST",
-      category: "AUDIO_ENGINEER",
-      city: "Санкт-Петербург",
-      isOnline: true,
-      isAvailableNow: false,
-      budgetFrom: 12000,
-      contactTelegram: "https://t.me/lena_mix"
-    },
-    {
-      email: "studio@artsafehub.app",
-      nickname: "Frame Studio",
-      safeId: "SAFE-ST-001",
-      role: "STUDIO",
-      category: "RECORDING_STUDIO",
-      city: "Алматы",
-      isOnline: false,
-      isAvailableNow: true,
-      budgetFrom: 8000,
-      contactUrl: "https://framestudio.example"
-    }
-  ];
-
-  for (const specialist of specialistUsers) {
+  for (const specialist of findTestProfiles) {
     const createdUser = await prisma.user.create({
       data: {
         email: specialist.email,
@@ -225,7 +163,7 @@ async function main() {
         nickname: specialist.nickname,
         safeId: specialist.safeId,
         role: specialist.role,
-        pathStageId: ideaStage.id
+        pathStageId: sparkStage.id
       }
     });
 
@@ -234,10 +172,13 @@ async function main() {
         userId: createdUser.id,
         category: specialist.category,
         city: specialist.city,
+        metro: specialist.metro,
         isOnline: specialist.isOnline,
         isAvailableNow: specialist.isAvailableNow,
-        bio: "Работаю с артистами на этапах от демо до релиза.",
-        portfolioLinks: ["https://example.com/portfolio"],
+        bio: specialist.bio,
+        portfolioLinks: specialist.portfolioLinks,
+        services: specialist.services,
+        credits: specialist.credits,
         budgetFrom: specialist.budgetFrom,
         contactTelegram: specialist.contactTelegram,
         contactUrl: specialist.contactUrl
@@ -250,7 +191,7 @@ async function main() {
     artist: user.email,
     tracks: 1,
     demos: 2,
-    specialists: specialistUsers.length
+    specialists: findTestProfiles.length
   });
 }
 
