@@ -8,8 +8,10 @@ export type WorkspacePreviewItem =
       id: string;
       type: "project";
       title: string;
+      releaseKind?: "SINGLE" | "ALBUM";
       coverType: "GRADIENT" | "IMAGE";
       coverImageUrl?: string | null;
+      coverPresetKey?: string | null;
       coverColorA?: string | null;
       coverColorB?: string | null;
     };
@@ -34,8 +36,12 @@ export type WorkspaceProjectNode = {
   sortIndex: number;
   projectMeta: {
     artistLabel?: string | null;
+    releaseKind?: "SINGLE" | "ALBUM";
+    singleTrackId?: string | null;
+    singleTrackStageName?: string | null;
     coverType: "GRADIENT" | "IMAGE";
     coverImageUrl?: string | null;
+    coverPresetKey?: string | null;
     coverColorA?: string | null;
     coverColorB?: string | null;
     trackCount: number;

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { DemoVersionType } from "@prisma/client";
+import { DemoVersionType as PrismaDemoVersionType } from "@prisma/client";
 import { z } from "zod";
 
 import { apiError, parseJsonBody, withApiHandler } from "@/lib/api";
@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
 
 const reorderDemosSchema = z.object({
-  versionType: z.nativeEnum(DemoVersionType),
+  versionType: z.enum(["IDEA_TEXT", "DEMO", "ARRANGEMENT", "NO_MIX", "MIXED", "MASTERED", "RELEASE"]),
   orderedDemoIds: z.array(z.string().min(1)).min(1)
 }).superRefine((value, ctx) => {
   const seen = new Set<string>();
@@ -38,7 +38,7 @@ export const POST = withApiHandler(async (request: Request, { params }: { params
   }
 
   const demosInStep = await prisma.demo.findMany({
-    where: { trackId: track.id, versionType: body.versionType },
+    where: { trackId: track.id, versionType: body.versionType as unknown as PrismaDemoVersionType },
     select: { id: true, trackId: true, versionType: true }
   });
 

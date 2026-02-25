@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
 import { MultiTrackRecorder, type MultiTrackRecorderHandle } from "@/components/audio/multi-track-recorder";
+import { SongAnalysisBadges } from "@/components/songs/song-analysis-badges";
 import {
   SongProjectPickerStep,
   type ProjectOption,
@@ -13,7 +14,14 @@ import {
 } from "@/components/songs/song-project-picker-step";
 import { Button } from "@/components/ui/button";
 import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
+import {
+  appendAudioAnalysisToFormData,
+  detectAudioAnalysisMvp,
+  type UploadAudioAnalysisMeta
+} from "@/lib/audio/upload-analysis-client";
+import { projectDefaultCoverForKind } from "@/lib/project-cover-style";
 import { clearNewSongFlowDraft, loadNewSongFlowDraft, type NewSongFlowDraft } from "@/lib/songs/new-song-flow-draft";
+import type { ProjectReleaseKind } from "@/lib/songs-project-navigation";
 import { findDemoStage, isDemoSongStage, type SongStageLike } from "@/lib/songs-version-stage-map";
 
 type PathStage = SongStageLike;
@@ -228,10 +236,12 @@ export default function NewDemoSongPage() {
   const [convertingVideo, setConvertingVideo] = useState(false);
   const [recorderResetKey, setRecorderResetKey] = useState(0);
   const [audioSource, setAudioSource] = useState<DemoAudioSource>(null);
+  const [audioSourceAnalysis, setAudioSourceAnalysis] = useState<UploadAudioAnalysisMeta | null>(null);
   const [showProjectStep, setShowProjectStep] = useState(false);
   const [selectionMode, setSelectionMode] = useState<ProjectSelectionMode>("existing");
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [newProjectTitle, setNewProjectTitle] = useState("");
+  const [newProjectReleaseKind, setNewProjectReleaseKind] = useState<ProjectReleaseKind>("SINGLE");
   const [projectStepError, setProjectStepError] = useState("");
   const [recorderError, setRecorderError] = useState("");
 
@@ -281,15 +291,17 @@ export default function NewDemoSongPage() {
       throw new Error("Введите название нового проекта.");
     }
 
+    const defaults = projectDefaultCoverForKind(newProjectReleaseKind);
     const response = await apiFetch("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title: newProjectTitle.trim(),
+        releaseKind: newProjectReleaseKind,
         coverType: "GRADIENT",
-        coverPresetKey: "lime-grove",
-        coverColorA: "#D9F99D",
-        coverColorB: "#65A30D"
+        coverPresetKey: defaults.coverPresetKey,
+        coverColorA: defaults.coverColorA,
+        coverColorB: defaults.coverColorB
       })
     });
     if (!response.ok) {
@@ -340,17 +352,21 @@ export default function NewDemoSongPage() {
       }
       const createdTrack = (await trackResponse.json()) as { id: string };
 
+      let analysis: Awaited<ReturnType<typeof detectAudioAnalysisMvp>> = null;
       const formData = new FormData();
       if (source.kind === "upload") {
         formData.append("file", source.file, source.file.name);
         formData.append("durationSec", String(source.durationSec));
+        analysis = await detectAudioAnalysisMvp(source.file);
       } else {
         formData.append("file", source.mix.blob, source.mix.filename);
         formData.append("durationSec", String(source.mix.durationSec));
+        analysis = await detectAudioAnalysisMvp(source.mix.blob);
       }
       formData.append("trackId", createdTrack.id);
       formData.append("noteText", "");
       formData.append("versionType", "DEMO");
+      appendAudioAnalysisToFormData(formData, analysis);
 
       const uploadResponse = await apiFetch("/api/audio-clips", { method: "POST", body: formData });
       if (!uploadResponse.ok) {
@@ -388,6 +404,7 @@ export default function NewDemoSongPage() {
     try {
       const durationSec = await getAudioDurationSeconds(file);
       setAudioSource({ kind: "upload", file, durationSec });
+      setAudioSourceAnalysis(await detectAudioAnalysisMvp(file));
       setShowProjectStep(true);
       setRecorderError("");
       setDraft((prev) => (prev ? { ...prev, branch: "DEMO_UPLOAD", demoReadyFileMeta: { name: file.name } } : prev));
@@ -405,6 +422,7 @@ export default function NewDemoSongPage() {
     try {
       const converted = await convertVideoFileToWav(file);
       setAudioSource({ kind: "upload", file: converted.file, durationSec: converted.durationSec });
+      setAudioSourceAnalysis(await detectAudioAnalysisMvp(converted.file));
       setShowProjectStep(true);
       setDraft((prev) =>
         prev ? { ...prev, branch: "DEMO_UPLOAD", demoReadyFileMeta: { name: converted.file.name } } : prev
@@ -514,6 +532,13 @@ export default function NewDemoSongPage() {
             </Button>
             <span className="self-center text-xs text-brand-muted">{currentSourceLabel}</span>
           </div>
+          <SongAnalysisBadges
+            bpm={audioSourceAnalysis?.bpm}
+            keyRoot={audioSourceAnalysis?.keyRoot}
+            keyMode={audioSourceAnalysis?.keyMode}
+            className="mb-4"
+            compact
+          />
 
           <input
             ref={beatInputRef}
@@ -521,8 +546,9 @@ export default function NewDemoSongPage() {
             accept="audio/*"
             className="hidden"
             onChange={async (event) => {
-              await handleBeatFileSelected(event.target.files?.[0] ?? null);
-              event.currentTarget.value = "";
+              const input = event.currentTarget;
+              await handleBeatFileSelected(input.files?.[0] ?? null);
+              input.value = "";
             }}
           />
           <input
@@ -531,8 +557,9 @@ export default function NewDemoSongPage() {
             accept="audio/*"
             className="hidden"
             onChange={async (event) => {
-              await handleReadyDemoFileSelected(event.target.files?.[0] ?? null);
-              event.currentTarget.value = "";
+              const input = event.currentTarget;
+              await handleReadyDemoFileSelected(input.files?.[0] ?? null);
+              input.value = "";
             }}
           />
           <input
@@ -541,27 +568,32 @@ export default function NewDemoSongPage() {
             accept="video/*"
             className="hidden"
             onChange={async (event) => {
-              await handleConvertVideoSelected(event.target.files?.[0] ?? null);
-              event.currentTarget.value = "";
+              const input = event.currentTarget;
+              await handleConvertVideoSelected(input.files?.[0] ?? null);
+              input.value = "";
             }}
           />
 
-          <MultiTrackRecorder
-            ref={recorderRef}
-            resetKey={recorderResetKey}
-            onError={setRecorderError}
-            onReset={() => {
-              setRecorderError("");
-              setAudioSource((prev) => (prev?.kind === "record" ? null : prev));
-            }}
-            onReady={(payload) => {
-              setRecorderError("");
-              setPageError("");
-              setAudioSource({ kind: "record", mix: payload });
-              setShowProjectStep(true);
-              setDraft((prev) => (prev ? { ...prev, branch: "DEMO_RECORD", demoReadyFileMeta: null } : prev));
-            }}
-          />
+          {audioSource?.kind !== "upload" && (
+            <MultiTrackRecorder
+              ref={recorderRef}
+              resetKey={recorderResetKey}
+              onError={setRecorderError}
+              onReset={() => {
+                setRecorderError("");
+                setAudioSourceAnalysis(null);
+                setAudioSource((prev) => (prev?.kind === "record" ? null : prev));
+              }}
+              onReady={(payload) => {
+                setRecorderError("");
+                setPageError("");
+                setAudioSource({ kind: "record", mix: payload });
+                void detectAudioAnalysisMvp(payload.blob).then(setAudioSourceAnalysis).catch(() => setAudioSourceAnalysis(null));
+                setShowProjectStep(true);
+                setDraft((prev) => (prev ? { ...prev, branch: "DEMO_RECORD", demoReadyFileMeta: null } : prev));
+              }}
+            />
+          )}
 
           {showProjectStep && !fixedProject && (
             <div className="mt-4 rounded-2xl border border-brand-border bg-white/85 p-4">
@@ -570,13 +602,17 @@ export default function NewDemoSongPage() {
                 selectionMode={selectionMode}
                 selectedProjectId={selectedProjectId}
                 newProjectTitle={newProjectTitle}
+                newProjectReleaseKind={newProjectReleaseKind}
                 onSelectionModeChange={setSelectionMode}
                 onSelectedProjectIdChange={setSelectedProjectId}
                 onNewProjectTitleChange={setNewProjectTitle}
+                onNewProjectReleaseKindChange={setNewProjectReleaseKind}
+                singleTrackTitle={draft.title}
                 onConfirm={() => void saveDemoToProject()}
                 confirmLabel={audioSource?.kind === "record" ? "Сохранить demo (recorder)" : "Сохранить demo"}
                 busy={saving}
                 error={projectStepError}
+                allowNewProjectKindChoice
                 modeLabel={
                   audioSource?.kind === "record"
                     ? "Сохраним сведённый микс как демо-версию."

@@ -3,12 +3,16 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Disc3, FolderOpen, Search } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
+import { projectDefaultCoverForKind } from "@/lib/project-cover-style";
 import { pickPreferredPlaybackDemo } from "@/lib/songs-playback-helpers";
+import { getProjectOpenHref, type ProjectReleaseKind } from "@/lib/songs-project-navigation";
 import { useSongsPlayback, type SongsPlaybackItem } from "@/components/songs/songs-playback-provider";
 import { DeleteFolderModal } from "@/components/songs/delete-folder-modal";
 import { MoveNodeModal } from "@/components/songs/move-node-modal";
@@ -115,6 +119,10 @@ async function fetcher<T>(url: string): Promise<T> {
   return apiFetchJson<T>(url);
 }
 
+function getWorkspaceHref(folderId: string | null) {
+  return folderId ? `/songs/folders/${folderId}` : "/songs";
+}
+
 export function WorkspaceBrowser({
   parentFolderId,
   externalQuery,
@@ -135,6 +143,7 @@ export function WorkspaceBrowser({
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newFolderTitle, setNewFolderTitle] = useState("");
   const [newProjectTitle, setNewProjectTitle] = useState("");
+  const [newProjectReleaseKind, setNewProjectReleaseKind] = useState<ProjectReleaseKind>("ALBUM");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
 
@@ -160,6 +169,10 @@ export function WorkspaceBrowser({
     if (!needle) return nodes;
     return nodes.filter((node) => node.title.toLowerCase().includes(needle));
   }, [nodes, query]);
+  const levelFolderCount = nodes.filter((node) => node.type === "folder").length;
+  const levelProjectCount = nodes.filter((node) => node.type === "project").length;
+  const visibleFolderCount = filteredNodes.filter((node) => node.type === "folder").length;
+  const visibleProjectCount = filteredNodes.filter((node) => node.type === "project").length;
 
   async function refreshAll() {
     await Promise.all([refetchWorkspace(), refetchFolders(), onChanged?.()]);
@@ -194,16 +207,18 @@ export function WorkspaceBrowser({
     setCreatingProject(true);
     setError("");
     try {
+      const defaults = projectDefaultCoverForKind(newProjectReleaseKind);
       const response = await apiFetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: newProjectTitle.trim(),
           folderId: parentFolderId,
+          releaseKind: newProjectReleaseKind,
           coverType: "GRADIENT",
-          coverPresetKey: "lime-grove",
-          coverColorA: "#D9F99D",
-          coverColorB: "#65A30D"
+          coverPresetKey: defaults.coverPresetKey,
+          coverColorA: defaults.coverColorA,
+          coverColorB: defaults.coverColorB
         })
       });
       if (!response.ok) {
@@ -212,6 +227,7 @@ export function WorkspaceBrowser({
       }
       setNewProjectTitle("");
       setShowCreateProject(false);
+      setNewProjectReleaseKind("ALBUM");
       await refreshAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось создать проект.");
@@ -353,6 +369,18 @@ export function WorkspaceBrowser({
     }
   }
 
+  function requestDeleteFolder(node: Extract<WorkspaceNode, { type: "folder" }>) {
+    setError("");
+    setMenuKey("");
+    if (node.itemCount > 0) {
+      setDeleteFolderPrompt({ id: node.id, title: node.title });
+      return;
+    }
+    const confirmed = window.confirm("Удалить пустую папку?");
+    if (!confirmed) return;
+    void deleteFolder(node);
+  }
+
   async function moveCurrentNode(targetFolderId: string | null) {
     if (!moveNode) return;
     const key = `${moveNode.type}:${moveNode.id}`;
@@ -471,32 +499,94 @@ export function WorkspaceBrowser({
       null)
     : null;
 
+  function openCreateProject(kind: ProjectReleaseKind) {
+    setNewProjectReleaseKind(kind);
+    setShowCreateProject((prev) => (prev && newProjectReleaseKind === kind ? false : true));
+  }
+
   return (
-    <Card className={className ?? "overflow-hidden rounded-3xl border border-brand-border bg-gradient-to-br from-[#f4f8ee] via-[#eff4e8] to-[#e8efde] p-0 shadow-sm"}>
+    <Card
+      className={
+        className ??
+        "relative overflow-hidden rounded-3xl border border-brand-border bg-gradient-to-br from-[#f4f8ee] via-[#eff4e8] to-[#e8efde] p-0 shadow-[0_18px_46px_rgba(55,74,61,0.14)]"
+      }
+    >
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(217,249,157,0.25),transparent_35%),radial-gradient(circle_at_100%_100%,rgba(42,52,44,0.06),transparent_42%)]" />
       {showHeader && (
-        <div className="border-b border-brand-border px-4 py-4 md:px-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="relative border-b border-brand-border px-4 py-4 md:px-5">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(255,255,255,0.45),transparent_38%)]" />
+          <div className="relative flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <Badge className="bg-white">
+                  <span className="-rotate-6 mr-1 inline-flex h-5 w-5 items-center justify-center rounded-md border border-brand-border bg-white shadow-[0_1px_0_rgba(42,52,44,0.08)]">
+                    <Disc3 className="h-3 w-3 text-brand-ink" />
+                  </span>
+                  Workspace
+                </Badge>
+              </div>
               <h2 className="text-xl font-semibold tracking-tight text-brand-ink">
                 {workspace?.currentFolder?.title ?? "Projects&Folders"}
               </h2>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-brand-muted">
-                {(workspace?.breadcrumbs ?? []).map((crumb, index) => (
-                  <span key={`${crumb.id ?? "root"}-${index}`} className="inline-flex items-center gap-2">
-                    {crumb.id ? <Link href={`/songs/folders/${crumb.id}`} className="hover:underline">{crumb.title}</Link> : <Link href="/songs" className="hover:underline">{crumb.title}</Link>}
-                    {index < (workspace?.breadcrumbs.length ?? 0) - 1 && <span>/</span>}
-                  </span>
-                ))}
-              </div>
+              <p className="mt-1 text-sm text-brand-muted">
+                {levelFolderCount} папок • {levelProjectCount} проектов на текущем уровне
+              </p>
+              {workspace?.breadcrumbs?.length ? (
+                <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-brand-muted">
+                  {workspace.currentFolder && (
+                    <Link
+                      href={getWorkspaceHref(workspace.currentFolder.parentFolderId ?? null)}
+                      className="rounded-lg border border-brand-border bg-white/80 px-2 py-1 text-brand-ink hover:bg-white"
+                    >
+                      ← Назад
+                    </Link>
+                  )}
+                  <nav aria-label="Путь папок" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    {workspace.breadcrumbs.map((crumb, index) => {
+                      const isLast = index === workspace.breadcrumbs.length - 1;
+                      return (
+                        <span key={`${crumb.id ?? "root"}:${index}`} className="inline-flex min-w-0 items-center gap-2">
+                          {isLast ? (
+                            <span className="max-w-[240px] truncate text-brand-ink">{crumb.title}</span>
+                          ) : (
+                            <Link href={getWorkspaceHref(crumb.id)} className="max-w-[180px] truncate hover:text-brand-ink hover:underline">
+                              {crumb.title}
+                            </Link>
+                          )}
+                          {!isLast && <span aria-hidden>›</span>}
+                        </span>
+                      );
+                    })}
+                  </nav>
+                </div>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {showCreateActions && (
                 <>
-                  <Button variant="secondary" onClick={() => setShowCreateFolder((prev) => !prev)}>
+                  <Button
+                    variant="secondary"
+                    className="rounded-xl border-brand-border bg-white/85 text-brand-ink hover:bg-white"
+                    onClick={() => setShowCreateFolder((prev) => !prev)}
+                  >
+                    <FolderOpen className="h-4 w-4" />
                     + Folder
                   </Button>
-                  <Button variant="secondary" onClick={() => setShowCreateProject((prev) => !prev)}>
-                    + Project
+                  <Button
+                    variant="secondary"
+                    className="rounded-xl border-brand-border bg-white/85 text-brand-ink hover:bg-white"
+                    onClick={() => openCreateProject("SINGLE")}
+                  >
+                    <Disc3 className="h-4 w-4" />
+                    + Single
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="rounded-xl border-brand-border bg-white/85 text-brand-ink hover:bg-white"
+                    onClick={() => openCreateProject("ALBUM")}
+                  >
+                    <Disc3 className="h-4 w-4" />
+                    + Album
                   </Button>
                 </>
               )}
@@ -504,30 +594,65 @@ export function WorkspaceBrowser({
           </div>
 
           {externalQuery === undefined && (
-            <div className="mt-3">
-              <Input value={localQuery} onChange={(event) => setLocalQuery(event.target.value)} placeholder="Поиск по текущему уровню..." className="bg-white/90" />
+            <div className="mt-3 rounded-2xl border border-brand-border bg-white/65 p-3 shadow-sm backdrop-blur-sm">
+              <label className="relative block">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-muted" />
+                <Input
+                  value={localQuery}
+                  onChange={(event) => setLocalQuery(event.target.value)}
+                  placeholder="Поиск по текущему уровню..."
+                  className="bg-white pl-9"
+                />
+              </label>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
+                  Видно папок: <span className="ml-1 font-medium text-brand-ink">{visibleFolderCount}</span>
+                </span>
+                <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
+                  Видно проектов: <span className="ml-1 font-medium text-brand-ink">{visibleProjectCount}</span>
+                </span>
+              </div>
             </div>
           )}
 
           {(showCreateFolder || showCreateProject) && (
             <div className="mt-3 grid gap-2 md:grid-cols-2">
               {showCreateFolder && (
-                <div className="rounded-2xl border border-brand-border bg-white/90 p-3">
+                <div className="relative overflow-hidden rounded-2xl border border-brand-border bg-white/90 p-3 shadow-sm">
+                  <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#d9f99d] to-transparent" />
                   <p className="mb-2 text-sm font-medium text-brand-ink">Новая папка</p>
                   <div className="flex gap-2">
-                    <Input value={newFolderTitle} onChange={(event) => setNewFolderTitle(event.target.value)} placeholder="untitled folder" />
-                    <Button onClick={createFolder} disabled={creatingFolder || !newFolderTitle.trim()}>
+                    <Input
+                      value={newFolderTitle}
+                      onChange={(event) => setNewFolderTitle(event.target.value)}
+                      placeholder="untitled folder"
+                      className="bg-white"
+                    />
+                    <Button className="rounded-xl" onClick={createFolder} disabled={creatingFolder || !newFolderTitle.trim()}>
                       {creatingFolder ? "..." : "Create"}
                     </Button>
                   </div>
                 </div>
               )}
               {showCreateProject && (
-                <div className="rounded-2xl border border-brand-border bg-white/90 p-3">
-                  <p className="mb-2 text-sm font-medium text-brand-ink">Новый проект</p>
+                <div className="relative overflow-hidden rounded-2xl border border-brand-border bg-white/90 p-3 shadow-sm">
+                  <div className={`pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${newProjectReleaseKind === "SINGLE" ? "from-[#bfdbfe] to-transparent" : "from-[#fda4af] via-[#c4b5fd] to-transparent"}`} />
+                  <p className="mb-1 text-sm font-medium text-brand-ink">
+                    Новый {newProjectReleaseKind === "SINGLE" ? "single" : "album"}
+                  </p>
+                  <p className="mb-2 text-xs text-brand-muted">
+                    {newProjectReleaseKind === "SINGLE"
+                      ? "Single открывается сразу в версии, когда внутри появится 1 трек."
+                      : "Album сохраняет текущую страницу проекта и плейлист треков."}
+                  </p>
                   <div className="flex gap-2">
-                    <Input value={newProjectTitle} onChange={(event) => setNewProjectTitle(event.target.value)} placeholder="untitled project" />
-                    <Button onClick={createProject} disabled={creatingProject || !newProjectTitle.trim()}>
+                    <Input
+                      value={newProjectTitle}
+                      onChange={(event) => setNewProjectTitle(event.target.value)}
+                      placeholder={newProjectReleaseKind === "SINGLE" ? "untitled single" : "untitled album"}
+                      className="bg-white"
+                    />
+                    <Button className="rounded-xl" onClick={createProject} disabled={creatingProject || !newProjectTitle.trim()}>
                       {creatingProject ? "..." : "Create"}
                     </Button>
                   </div>
@@ -542,9 +667,9 @@ export function WorkspaceBrowser({
 
       {!showHeader && error && <div className="p-4 pb-0"><p className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</p></div>}
 
-      <div className="p-4">
+      <div className="relative p-4 md:p-5">
         {workspaceLoading ? (
-          <div className="rounded-2xl border border-brand-border bg-white/70 p-4 text-sm text-brand-muted">Загрузка workspace...</div>
+          <div className="rounded-2xl border border-brand-border bg-white/70 p-4 text-sm text-brand-muted shadow-sm">Загрузка workspace...</div>
         ) : (
           <>
             <WorkspaceGrid
@@ -556,39 +681,120 @@ export function WorkspaceBrowser({
                 const key = `${node.type}:${node.id}`;
                 const menuOpen = menuKey === key;
                 const menu = (
-                  <div className="absolute right-0 top-10 z-10 min-w-[200px] rounded-2xl border border-brand-border bg-[#f7fbf2] p-2 shadow-[0_20px_40px_rgba(45,60,40,0.16)]">
+                  <div
+                    className="absolute right-0 top-10 z-10 min-w-[200px] rounded-2xl border border-brand-border bg-[#f7fbf2] p-2 shadow-[0_20px_40px_rgba(45,60,40,0.16)]"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => event.stopPropagation()}
+                  >
                     {node.type === "folder" ? (
                       <>
-                        <button type="button" className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5" onClick={() => togglePin(node)}>
+                        <button
+                          type="button"
+                          className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void togglePin(node);
+                          }}
+                        >
                           {node.pinnedAt ? "Unpin folder" : "Pin folder"}
                         </button>
-                        <button type="button" className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5" onClick={() => { setMoveNode(node); setMenuKey(""); }}>
+                        <button
+                          type="button"
+                          className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setMoveNode(node);
+                            setMenuKey("");
+                          }}
+                        >
                           Move folder
                         </button>
-                        <button type="button" className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5" onClick={() => void emptyFolder(node.id)}>
+                        <button
+                          type="button"
+                          className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void emptyFolder(node.id);
+                          }}
+                        >
                           Empty folder
                         </button>
                         <div className="my-1 h-px bg-black/5" />
-                        <button type="button" className="block w-full rounded-xl px-3 py-2 text-left text-sm text-red-700 hover:bg-black/5" onClick={() => void deleteFolder(node)}>
+                        <button
+                          type="button"
+                          className="block w-full rounded-xl px-3 py-2 text-left text-sm text-red-700 hover:bg-black/5"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            requestDeleteFolder(node);
+                          }}
+                        >
                           Delete folder
                         </button>
                       </>
                     ) : (
                       <>
-                        <Link href={`/songs/projects/${node.id}`} className="block rounded-xl px-3 py-2 text-sm text-brand-ink hover:bg-black/5" onClick={() => setMenuKey("")}>
+                        <Link
+                          href={getProjectOpenHref({
+                            id: node.id,
+                            releaseKind: node.projectMeta.releaseKind ?? "ALBUM",
+                            singleTrackId: node.projectMeta.singleTrackId ?? null
+                          })}
+                          className="block rounded-xl px-3 py-2 text-sm text-brand-ink hover:bg-black/5"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMenuKey("");
+                          }}
+                        >
                           Open
                         </Link>
-                        <button type="button" className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5" onClick={() => togglePin(node)}>
+                        <button
+                          type="button"
+                          className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void togglePin(node);
+                          }}
+                        >
                           {node.pinnedAt ? "Unpin project" : "Pin project"}
                         </button>
-                        <button type="button" className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5" onClick={() => { setMoveNode(node); setMenuKey(""); }}>
+                        <button
+                          type="button"
+                          className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setMoveNode(node);
+                            setMenuKey("");
+                          }}
+                        >
                           Move project
                         </button>
-                        <button type="button" className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5" onClick={() => void renameProject(node)}>
+                        <button
+                          type="button"
+                          className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void renameProject(node);
+                          }}
+                        >
                           Rename project
                         </button>
                         <div className="my-1 h-px bg-black/5" />
-                        <button type="button" className="block w-full rounded-xl px-3 py-2 text-left text-sm text-red-700 hover:bg-black/5" onClick={() => void deleteProject(node)}>
+                        <button
+                          type="button"
+                          className="block w-full rounded-xl px-3 py-2 text-left text-sm text-red-700 hover:bg-black/5"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void deleteProject(node);
+                          }}
+                        >
                           Delete project
                         </button>
                       </>
@@ -627,7 +833,7 @@ export function WorkspaceBrowser({
             />
 
             {!filteredNodes.length && (
-              <div className="mt-4 rounded-2xl border border-dashed border-brand-border bg-white/70 p-4 text-sm text-brand-muted">
+              <div className="mt-4 rounded-2xl border border-dashed border-brand-border bg-white/70 p-4 text-sm text-brand-muted shadow-sm">
                 В этом уровне пока пусто.
               </div>
             )}

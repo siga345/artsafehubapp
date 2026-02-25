@@ -82,7 +82,7 @@ export function playbackAccentButtonStyle(cover?: PlaybackCoverLike) {
 
   return {
     background: `linear-gradient(145deg, ${colorA}, ${colorB})`,
-    borderColor: isLight ? "rgba(73, 98, 62, 0.22)" : "rgba(255,255,255,0.16)",
+    borderColor: "rgba(0, 0, 0, 0.9)",
     color: isLight ? "#183126" : "#f4fff6"
   };
 }

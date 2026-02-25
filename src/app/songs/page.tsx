@@ -4,11 +4,13 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
+import { Disc3, FolderOpen, Music, Search, SlidersHorizontal, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MultiTrackRecorder } from "@/components/audio/multi-track-recorder";
 import { PlaybackIcon } from "@/components/songs/playback-icon";
+import { SongAnalysisBadges } from "@/components/songs/song-analysis-badges";
 import { SongProjectPickerStep, type ProjectSelectionMode } from "@/components/songs/song-project-picker-step";
 import { useSongsPlayback, type SongsPlaybackItem } from "@/components/songs/songs-playback-provider";
 import { WorkspaceBrowser } from "@/components/songs/workspace-browser";
@@ -16,7 +18,10 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
+import { appendAudioAnalysisToFormData, detectAudioAnalysisMvp, type UploadAudioAnalysisMeta } from "@/lib/audio/upload-analysis-client";
+import { buildProjectCoverStyle, projectDefaultCoverForKind } from "@/lib/project-cover-style";
 import { pickPreferredPlaybackDemo, playbackAccentButtonStyle } from "@/lib/songs-playback-helpers";
+import { getProjectOpenHref, type ProjectReleaseKind } from "@/lib/songs-project-navigation";
 import {
   clearNewSongFlowDraft,
   saveNewSongFlowDraft,
@@ -41,6 +46,8 @@ type Project = {
   artistLabel?: string | null;
   folderId: string | null;
   updatedAt: string;
+  releaseKind?: "SINGLE" | "ALBUM";
+  singleTrackId?: string | null;
   coverType: "GRADIENT" | "IMAGE";
   coverImageUrl?: string | null;
   coverPresetKey?: string | null;
@@ -85,12 +92,54 @@ type Track = {
   lyricsText?: string | null;
   updatedAt: string;
   folderId: string | null;
+  projectId?: string | null;
+  project?:
+    | {
+        id: string;
+        title: string;
+        artistLabel?: string | null;
+        releaseKind?: "SINGLE" | "ALBUM";
+        coverType?: "GRADIENT" | "IMAGE";
+        coverImageUrl?: string | null;
+        coverPresetKey?: string | null;
+        coverColorA?: string | null;
+        coverColorB?: string | null;
+      }
+    | null;
+  distributionRequest?: {
+    id: string;
+    artistName: string;
+    releaseTitle: string;
+    releaseDate: string;
+    status?: string;
+  } | null;
+  releaseDemo?: {
+    id: string;
+    createdAt: string;
+    releaseDate?: string | null;
+  } | null;
+  releaseArchiveMeta?: {
+    source: "distribution_request" | "release_demo" | "legacy_stage";
+    title: string;
+    artistName?: string | null;
+    releaseDate?: string | null;
+    releaseKind?: "SINGLE" | "ALBUM" | null;
+    coverType?: "GRADIENT" | "IMAGE" | null;
+    coverImageUrl?: string | null;
+    coverPresetKey?: string | null;
+    coverColorA?: string | null;
+    coverColorB?: string | null;
+    isArchivedSingle?: boolean;
+  } | null;
+  displayBpm?: number | null;
+  displayKeyRoot?: string | null;
+  displayKeyMode?: string | null;
   pathStageId: number | null;
   pathStage?: { id: number; name: string } | null;
   _count?: { demos: number };
 };
 
-type DemoVersionType = "IDEA_TEXT" | "DEMO" | "ARRANGEMENT" | "NO_MIX" | "MIXED" | "MASTERED";
+type DemoVersionType = "IDEA_TEXT" | "DEMO" | "ARRANGEMENT" | "NO_MIX" | "MIXED" | "MASTERED" | "RELEASE";
 type SongFlowStep = "lyrics" | "stage" | "file-upload" | "project-pick";
 
 function normalizeStageName(name: string) {
@@ -110,7 +159,13 @@ function findStageIdByVersionType(stages: PathStage[] | undefined, versionType: 
       name.includes("выход в свет") || name.includes("первые успех") || name.includes("продакшн") || name.includes("аранж"),
     NO_MIX: (name) => name.includes("прорыв") || name.includes("закреплен") || name.includes("запис"),
     MIXED: (name) => name.includes("признан") || name.includes("аудитор") || name.includes("свед"),
-    MASTERED: (name) => name.includes("широкая известность") || name.includes("медийн") || name.includes("мастер")
+    MASTERED: (name) => name.includes("широкая известность") || name.includes("медийн") || name.includes("мастер"),
+    RELEASE: (name) =>
+      name.includes("релиз") ||
+      name.includes("дистр") ||
+      name.includes("наслед") ||
+      name.includes("культурн") ||
+      name.includes("влияни")
   };
   const match = stages.find((stage) => checks[versionType](normalizeStageName(stage.name)));
   return match?.id ?? null;
@@ -118,6 +173,29 @@ function findStageIdByVersionType(stages: PathStage[] | undefined, versionType: 
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function formatReleaseArchiveDate(value: string) {
+  return new Date(`${value}T00:00:00.000Z`).toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+}
+
+function releaseKindLabelRu(value: "SINGLE" | "ALBUM" | null | undefined) {
+  if (value === "ALBUM") return "Альбом";
+  if (value === "SINGLE") return "Сингл";
+  return "Релиз";
+}
+
+function pluralizeRu(count: number, one: string, few: string, many: string) {
+  const abs = Math.abs(count) % 100;
+  const last = abs % 10;
+  if (abs >= 11 && abs <= 14) return many;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
 }
 
 async function fetcher<T>(url: string): Promise<T> {
@@ -174,6 +252,7 @@ export default function SongsPage() {
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newFolderTitle, setNewFolderTitle] = useState("");
   const [newProjectTitle, setNewProjectTitle] = useState("");
+  const [newProjectReleaseKind, setNewProjectReleaseKind] = useState<ProjectReleaseKind>("ALBUM");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const [deletingFolderId, setDeletingFolderId] = useState("");
@@ -198,9 +277,11 @@ export default function SongsPage() {
     createdAt: Date.now()
   });
   const [songFlowFile, setSongFlowFile] = useState<File | null>(null);
+  const [songFlowFileAnalysis, setSongFlowFileAnalysis] = useState<UploadAudioAnalysisMeta | null>(null);
   const [songFlowSelectionMode, setSongFlowSelectionMode] = useState<ProjectSelectionMode>("existing");
   const [songFlowSelectedProjectId, setSongFlowSelectedProjectId] = useState("");
   const [songFlowNewProjectTitle, setSongFlowNewProjectTitle] = useState("");
+  const [songFlowNewProjectReleaseKind, setSongFlowNewProjectReleaseKind] = useState<ProjectReleaseKind>("SINGLE");
   const [songFlowSaving, setSongFlowSaving] = useState(false);
   const [songFlowError, setSongFlowError] = useState("");
 
@@ -212,11 +293,13 @@ export default function SongsPage() {
   const [demoVersionComment, setDemoVersionComment] = useState("");
   const [editingDemoVersionComment, setEditingDemoVersionComment] = useState(false);
   const [demoFile, setDemoFile] = useState<File | null>(null);
+  const [demoFileAnalysis, setDemoFileAnalysis] = useState<UploadAudioAnalysisMeta | null>(null);
   const [demoVersionType, setDemoVersionType] = useState<DemoVersionType>("IDEA_TEXT");
   const [savingDemo, setSavingDemo] = useState(false);
   const [demoError, setDemoError] = useState("");
 
   const [recordedMix, setRecordedMix] = useState<{ blob: Blob; durationSec: number; filename: string } | null>(null);
+  const [recordedMixAnalysis, setRecordedMixAnalysis] = useState<UploadAudioAnalysisMeta | null>(null);
   const [recorderResetKey, setRecorderResetKey] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -261,26 +344,56 @@ export default function SongsPage() {
     }));
   }, [filteredProjects, folders]);
 
-  const releaseStageIds = useMemo(
-    () =>
-      new Set(
-        (visibleStages ?? [])
-          .filter((stage) => normalizeStageName(stage.name).includes("релиз"))
-          .map((stage) => stage.id)
-      ),
-    [visibleStages]
+  const releaseSinglesCount = useMemo(() => {
+    const singleProjectIds = new Set<string>();
+    (tracks ?? []).forEach((track) => {
+      if (!track.releaseArchiveMeta) return;
+      if (track.releaseArchiveMeta.releaseKind !== "SINGLE" || !track.project?.id) return;
+      singleProjectIds.add(track.project.id);
+    });
+    return singleProjectIds.size;
+  }, [tracks]);
+
+  const releaseAlbumsCount = useMemo(() => {
+    const albumProjectIds = new Set<string>();
+    (tracks ?? []).forEach((track) => {
+      if (!track.releaseArchiveMeta) return;
+      if (track.releaseArchiveMeta.releaseKind !== "ALBUM" || !track.project?.id) return;
+      albumProjectIds.add(track.project.id);
+    });
+    return albumProjectIds.size;
+  }, [tracks]);
+
+  const projectSinglesCount = useMemo(
+    () => (projects ?? []).filter((project) => project.releaseKind === "SINGLE").length,
+    [projects]
   );
 
-  const releaseTracksCount = useMemo(
-    () =>
-      (tracks ?? []).filter((track) => {
-        if (track.pathStage?.name && normalizeStageName(track.pathStage.name).includes("релиз")) {
-          return true;
-        }
-        return track.pathStageId !== null && releaseStageIds.has(track.pathStageId);
-      }).length,
-    [releaseStageIds, tracks]
+  const projectAlbumsCount = useMemo(
+    () => (projects ?? []).filter((project) => (project.releaseKind ?? "ALBUM") === "ALBUM").length,
+    [projects]
   );
+  const foldersCount = folders?.length ?? 0;
+  const tracksCount = tracks?.length ?? 0;
+  const releaseArchiveTracks = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return [...(tracks ?? [])]
+      .filter((track) => track.releaseArchiveMeta)
+      .filter((track) => {
+        if (!needle) return true;
+        const haystack = [
+          track.releaseArchiveMeta?.title ?? "",
+          track.releaseArchiveMeta?.artistName ?? "",
+          track.title,
+          track.project?.title ?? "",
+          track.pathStage?.name ?? ""
+        ]
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(needle);
+      })
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }, [query, tracks]);
 
   const recentTracks = useMemo(() => {
     return [...(filteredTracks ?? [])]
@@ -344,6 +457,7 @@ export default function SongsPage() {
 
   function resetDemoComposer() {
     setRecordedMix(null);
+    setRecordedMixAnalysis(null);
     setRecorderResetKey((prev) => prev + 1);
     setDemoMode("upload");
     setDemoNewTrackTitle("");
@@ -352,6 +466,7 @@ export default function SongsPage() {
     setDemoVersionComment("");
     setEditingDemoVersionComment(false);
     setDemoFile(null);
+    setDemoFileAnalysis(null);
     setDemoVersionType("IDEA_TEXT");
     setDemoError("");
     if (fileInputRef.current) {
@@ -388,9 +503,11 @@ export default function SongsPage() {
     setSongFlowStep("lyrics");
     setSongFlowDraft(createEmptySongFlowDraft());
     setSongFlowFile(null);
+    setSongFlowFileAnalysis(null);
     setSongFlowSelectionMode((projects?.length ?? 0) > 0 ? "existing" : "new");
     setSongFlowSelectedProjectId("");
     setSongFlowNewProjectTitle("");
+    setSongFlowNewProjectReleaseKind("SINGLE");
     setSongFlowSaving(false);
     setSongFlowError("");
     if (songFlowFileInputRef.current) {
@@ -413,6 +530,7 @@ export default function SongsPage() {
     setSongFlowSelectionMode((projects?.length ?? 0) > 0 ? "existing" : "new");
     setSongFlowSelectedProjectId("");
     setSongFlowNewProjectTitle((prev) => prev || songFlowDraft.title || "");
+    setSongFlowNewProjectReleaseKind((prev) => prev || "SINGLE");
     setSongFlowError("");
   }
 
@@ -428,15 +546,17 @@ export default function SongsPage() {
       throw new Error("Введите название нового проекта.");
     }
 
+    const defaults = projectDefaultCoverForKind(songFlowNewProjectReleaseKind);
     const response = await apiFetch("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title: songFlowNewProjectTitle.trim(),
+        releaseKind: songFlowNewProjectReleaseKind,
         coverType: "GRADIENT",
-        coverPresetKey: "lime-grove",
-        coverColorA: "#D9F99D",
-        coverColorB: "#65A30D"
+        coverPresetKey: defaults.coverPresetKey,
+        coverColorA: defaults.coverColorA,
+        coverColorB: defaults.coverColorB
       })
     });
     if (!response.ok) {
@@ -447,13 +567,21 @@ export default function SongsPage() {
     return created.id;
   }
 
-  async function uploadSongFlowAudio(trackId: string, file: Blob, filename: string, durationSec: number, versionType: DemoVersionType) {
+  async function uploadSongFlowAudio(
+    trackId: string,
+    file: Blob,
+    filename: string,
+    durationSec: number,
+    versionType: DemoVersionType,
+    analysis: UploadAudioAnalysisMeta | null = null
+  ) {
     const formData = new FormData();
     formData.append("file", file, filename);
     formData.append("durationSec", String(durationSec));
     formData.append("trackId", trackId);
     formData.append("noteText", "");
     formData.append("versionType", versionType);
+    appendAudioAnalysisToFormData(formData, analysis);
 
     const response = await apiFetch("/api/audio-clips", { method: "POST", body: formData });
     if (!response.ok) {
@@ -527,7 +655,8 @@ export default function SongsPage() {
     }
     const createdTrack = (await createTrackResponse.json()) as { id: string };
     const durationSec = await getAudioDurationSeconds(songFlowFile);
-    await uploadSongFlowAudio(createdTrack.id, songFlowFile, songFlowFile.name, durationSec, versionType);
+    const analysis = await detectAudioAnalysisMvp(songFlowFile);
+    await uploadSongFlowAudio(createdTrack.id, songFlowFile, songFlowFile.name, durationSec, versionType, analysis);
   }
 
   async function confirmSongFlowProjectStep() {
@@ -549,16 +678,6 @@ export default function SongsPage() {
     } finally {
       setSongFlowSaving(false);
     }
-  }
-
-  function handleSongFlowSkipLyrics() {
-    if (!songFlowDraft.title.trim()) {
-      setSongFlowError("Укажи название песни.");
-      return;
-    }
-    setSongFlowDraft((prev) => ({ ...prev, lyricsWasSkipped: true, branch: null }));
-    setSongFlowStep("stage");
-    setSongFlowError("");
   }
 
   function handleSongFlowContinueWithLyrics() {
@@ -694,15 +813,17 @@ export default function SongsPage() {
     setCreatingProject(true);
     setProjectActionError("");
     try {
+      const defaults = projectDefaultCoverForKind(newProjectReleaseKind);
       const response = await apiFetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: newProjectTitle.trim(),
+          releaseKind: newProjectReleaseKind,
           coverType: "GRADIENT",
-          coverPresetKey: "lime-grove",
-          coverColorA: "#D9F99D",
-          coverColorB: "#65A30D"
+          coverPresetKey: defaults.coverPresetKey,
+          coverColorA: defaults.coverColorA,
+          coverColorB: defaults.coverColorB
         })
       });
       if (!response.ok) {
@@ -711,6 +832,7 @@ export default function SongsPage() {
       }
       setNewProjectTitle("");
       setShowCreateProject(false);
+      setNewProjectReleaseKind("ALBUM");
       await refetchProjects();
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось создать проект.");
@@ -986,12 +1108,14 @@ export default function SongsPage() {
         return;
       }
 
+      const analysis = await detectAudioAnalysisMvp(fileToUpload);
       const formData = new FormData();
       formData.append("file", fileToUpload, filename);
       formData.append("durationSec", String(durationSec));
       formData.append("trackId", targetTrackId);
       formData.append("noteText", demoVersionComment.trim());
       formData.append("versionType", demoVersionType);
+      appendAudioAnalysisToFormData(formData, analysis);
 
       const uploadResponse = await apiFetch("/api/audio-clips", { method: "POST", body: formData });
       if (!uploadResponse.ok) {
@@ -1013,16 +1137,29 @@ export default function SongsPage() {
     await Promise.all([refetchFolders(), refetchProjects(), refetchTracks()]);
   }
 
+  function openCreateProjectPanel(kind: ProjectReleaseKind) {
+    setNewProjectReleaseKind(kind);
+    setShowCreateProject(true);
+  }
+
   return (
     <div className="space-y-6 pb-12">
-      <section className="relative overflow-hidden rounded-3xl border border-brand-border bg-gradient-to-br from-[#f2f7e9] via-[#edf3e3] to-[#e6eedb] p-5 md:p-7">
+      <section className="relative overflow-visible rounded-3xl border border-brand-border bg-gradient-to-br from-[#f2f7e9] via-[#edf3e3] to-[#e6eedb] p-4 md:p-6">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(217,249,157,0.45),transparent_38%),radial-gradient(circle_at_100%_100%,rgba(42,52,44,0.08),transparent_46%)]" />
         <div className="pointer-events-none absolute -right-20 -top-20 h-48 w-48 rounded-full bg-[#8cae78]/25 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-20 left-1/3 h-52 w-52 rounded-full bg-[#b5cba2]/35 blur-3xl" />
-        <div className="relative space-y-5">
+        <div className="relative space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
+            <div className="min-w-0">
+              <div className="mb-2 inline-flex items-center gap-2 rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">
+                <span className="-rotate-6 inline-flex h-5 w-5 items-center justify-center rounded-md border border-brand-border bg-white shadow-[0_1px_0_rgba(42,52,44,0.08)]">
+                  <Music className="h-3 w-3 text-brand-ink" />
+                </span>
+                Songs
+              </div>
               <h1 className="text-2xl font-semibold tracking-tight text-brand-ink md:text-3xl">SONGS Workspace</h1>
             </div>
+
             <div className="relative">
               <Button
                 className="min-w-[132px] rounded-2xl px-5 shadow-sm"
@@ -1031,7 +1168,7 @@ export default function SongsPage() {
                 + Add
               </Button>
               {showAddMenu && (
-                <div className="absolute right-0 top-12 z-20 min-w-[220px] overflow-hidden rounded-2xl border border-brand-border bg-white/95 p-2 shadow-[0_18px_48px_rgba(40,55,38,0.16)] backdrop-blur">
+                <div className="absolute left-1/2 top-12 z-30 w-[calc(100vw-2rem)] max-w-[22rem] -translate-x-1/2 overflow-hidden rounded-2xl border border-brand-border bg-white/95 p-2 shadow-[0_18px_48px_rgba(40,55,38,0.16)] backdrop-blur sm:left-auto sm:right-0 sm:w-auto sm:min-w-[220px] sm:max-w-none sm:translate-x-0">
                   <div className="space-y-1">
                     <button
                       type="button"
@@ -1049,14 +1186,22 @@ export default function SongsPage() {
                       className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
                       onClick={() => {
                         setShowAddMenu(false);
-                        setShowCreateProject((prev) => !prev);
-                        if (showCreateProject) {
-                          setNewProjectTitle("");
-                        }
+                        openCreateProjectPanel("SINGLE");
                       }}
                     >
-                      <span>Project</span>
-                      <span className="text-xs text-brand-muted">{showCreateProject ? "Скрыть" : "Новый"}</span>
+                      <span>Single</span>
+                      <span className="text-xs text-brand-muted">Прямо в версии</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                      onClick={() => {
+                        setShowAddMenu(false);
+                        openCreateProjectPanel("ALBUM");
+                      }}
+                    >
+                      <span>Album</span>
+                      <span className="text-xs text-brand-muted">Страница проекта</span>
                     </button>
                     <button
                       type="button"
@@ -1078,39 +1223,117 @@ export default function SongsPage() {
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2">
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Найти трек или идею..."
-              className="bg-white/90"
-            />
-            <Select value={selectedStageId} onChange={(event) => setSelectedStageId(event.target.value)} className="bg-white/90">
-              <option value="ALL">Все статусы</option>
-              {visibleStages.map((stage) => (
-                <option key={stage.id} value={String(stage.id)}>
-                  {stage.name}
-                </option>
-              ))}
-            </Select>
+          <div className="rounded-2xl border border-brand-border bg-white/70 p-3 shadow-sm backdrop-blur-sm">
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+              <label className="relative block">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-muted" />
+                <Input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Найти трек, проект или идею..."
+                  className="h-11 bg-white pl-9"
+                />
+              </label>
+
+              <label className="relative block">
+                <SlidersHorizontal className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-muted" />
+                <Select value={selectedStageId} onChange={(event) => setSelectedStageId(event.target.value)} className="h-11 bg-white pl-9">
+                  <option value="ALL">Все статусы</option>
+                  {visibleStages.map((stage) => (
+                    <option key={stage.id} value={String(stage.id)}>
+                      {stage.name}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
+                Поиск: <span className="ml-1 font-medium text-brand-ink">{query.trim() ? "активен" : "все"}</span>
+              </span>
+              <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
+                Статус:{" "}
+                <span className="ml-1 font-medium text-brand-ink">
+                  {selectedStageId === "ALL"
+                    ? "все"
+                    : visibleStages.find((stage) => String(stage.id) === selectedStageId)?.name ?? "фильтр"}
+                </span>
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:gap-3">
-            <div className="rounded-2xl border border-brand-border bg-white/80 p-2.5 sm:p-3">
-              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Папок</p>
-              <p className="text-xl font-semibold leading-none text-brand-ink sm:text-2xl">{folders?.length ?? 0}</p>
+            <div className="group relative overflow-hidden rounded-2xl border border-brand-border bg-white/82 p-3 shadow-sm">
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#d9f99d] to-[#9ecf63]" />
+              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl border border-brand-border bg-[#edf4e5] text-brand-ink">
+                <FolderOpen className="h-4 w-4" />
+              </div>
+              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Папки</p>
+              <p className="text-xl font-semibold leading-none text-brand-ink sm:text-2xl">
+                <span>{foldersCount}</span>
+                <span className="ml-1 text-sm font-medium text-brand-muted sm:text-base">
+                  {pluralizeRu(foldersCount, "папка", "папки", "папок")}
+                </span>
+              </p>
             </div>
-            <div className="rounded-2xl border border-brand-border bg-white/80 p-2.5 sm:p-3">
-              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Проектов</p>
-              <p className="text-xl font-semibold leading-none text-brand-ink sm:text-2xl">{projects?.length ?? 0}</p>
+
+            <div className="group relative overflow-hidden rounded-2xl border border-brand-border bg-white/82 p-3 shadow-sm">
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#dbeafe] to-[#93c5fd]" />
+              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl border border-brand-border bg-[#eef4fb] text-brand-ink">
+                <Disc3 className="h-4 w-4" />
+              </div>
+              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Проекты</p>
+              <div className="space-y-1">
+                <p className="text-sm leading-none text-brand-ink sm:text-base">
+                  <span className="font-semibold">{projectSinglesCount}</span>
+                  <span className="ml-1 text-brand-muted">
+                    {pluralizeRu(projectSinglesCount, "сингл", "сингла", "синглов")}
+                  </span>
+                </p>
+                <p className="text-sm leading-none text-brand-ink sm:text-base">
+                  <span className="font-semibold">{projectAlbumsCount}</span>
+                  <span className="ml-1 text-brand-muted">
+                    {pluralizeRu(projectAlbumsCount, "альбом", "альбома", "альбомов")}
+                  </span>
+                </p>
+              </div>
             </div>
-            <div className="rounded-2xl border border-brand-border bg-white/80 p-2.5 sm:p-3">
-              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Треков</p>
-              <p className="text-xl font-semibold leading-none text-brand-ink sm:text-2xl">{tracks?.length ?? 0}</p>
+
+            <div className="group relative overflow-hidden rounded-2xl border border-brand-border bg-white/82 p-3 shadow-sm">
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#fde68a] to-[#f59e0b]" />
+              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl border border-brand-border bg-[#fff6dd] text-brand-ink">
+                <Music className="h-4 w-4" />
+              </div>
+              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Треки</p>
+              <p className="text-xl font-semibold leading-none text-brand-ink sm:text-2xl">
+                <span>{tracksCount}</span>
+                <span className="ml-1 text-sm font-medium text-brand-muted sm:text-base">
+                  {pluralizeRu(tracksCount, "трек", "трека", "треков")}
+                </span>
+              </p>
             </div>
-            <div className="rounded-2xl border border-red-400 bg-white/80 p-2.5 sm:p-3">
-              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Релизов</p>
-              <p className="text-xl font-semibold leading-none text-brand-ink sm:text-2xl">{releaseTracksCount}</p>
+
+            <div className="group relative overflow-hidden rounded-2xl border border-red-300/80 bg-white/82 p-3 shadow-sm">
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#fca5a5] to-[#ef4444]" />
+              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl border border-red-200 bg-[#fff1f1] text-[#8b2626]">
+                <Sparkles className="h-4 w-4" />
+              </div>
+              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Релизы</p>
+              <div className="space-y-1">
+                <p className="text-sm leading-none text-brand-ink sm:text-base">
+                  <span className="font-semibold">{releaseSinglesCount}</span>
+                  <span className="ml-1 text-brand-muted">
+                    {pluralizeRu(releaseSinglesCount, "сингл", "сингла", "синглов")}
+                  </span>
+                </p>
+                <p className="text-sm leading-none text-brand-ink sm:text-base">
+                  <span className="font-semibold">{releaseAlbumsCount}</span>
+                  <span className="ml-1 text-brand-muted">
+                    {pluralizeRu(releaseAlbumsCount, "альбом", "альбома", "альбомов")}
+                  </span>
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -1147,14 +1370,18 @@ export default function SongsPage() {
       {showCreateProject && (
         <Card className="rounded-2xl">
           <CardHeader>
-            <CardTitle>Создать проект</CardTitle>
-            <CardDescription>Пустой проект с обложкой. Треки добавишь уже внутри проекта.</CardDescription>
+            <CardTitle>Создать {newProjectReleaseKind === "SINGLE" ? "single" : "album"}</CardTitle>
+            <CardDescription>
+              {newProjectReleaseKind === "SINGLE"
+                ? "Пустой single-проект. После добавления одного трека карточка будет открываться сразу в версии."
+                : "Пустой album-проект с обложкой. Треки добавишь уже внутри проекта."}
+            </CardDescription>
           </CardHeader>
           <div className="grid gap-2 md:grid-cols-3">
             <Input
               value={newProjectTitle}
               onChange={(event) => setNewProjectTitle(event.target.value)}
-              placeholder="Название проекта"
+              placeholder={newProjectReleaseKind === "SINGLE" ? "Название single" : "Название альбома"}
             />
             <Button disabled={creatingProject || !newProjectTitle.trim()} onClick={createProject}>
               {creatingProject ? "Создаем..." : "Создать"}
@@ -1164,6 +1391,7 @@ export default function SongsPage() {
               onClick={() => {
                 setShowCreateProject(false);
                 setNewProjectTitle("");
+                setNewProjectReleaseKind("ALBUM");
               }}
             >
               Отмена
@@ -1179,6 +1407,81 @@ export default function SongsPage() {
       )}
 
       <WorkspaceBrowser parentFolderId={null} externalQuery={query} showCreateActions={false} onChanged={refetchWorkspaceSurface} />
+
+      <Card className="relative overflow-hidden rounded-3xl border border-brand-border bg-gradient-to-br from-[#fff6ef] via-[#fff3ef] to-[#f8ece8] p-0 shadow-[0_18px_46px_rgba(88,53,44,0.12)]">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(252,165,165,0.22),transparent_35%),radial-gradient(circle_at_100%_100%,rgba(127,29,29,0.06),transparent_42%)]" />
+        <div className="relative border-b border-brand-border px-4 py-4 md:px-5">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(255,255,255,0.45),transparent_38%)]" />
+          <div className="relative flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="mb-2 inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white/90 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#8b2626]">
+                <Sparkles className="h-3.5 w-3.5" />
+                Archive
+              </div>
+              <h2 className="text-xl font-semibold tracking-tight text-brand-ink">Release Archive</h2>
+              <p className="mt-1 text-sm text-brand-muted">
+                Архив релизов с финальной инфой (вручную или из нашей дистрибуции). Использует общий поиск сверху.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
+                Треков: <span className="ml-1 font-medium text-brand-ink">{releaseArchiveTracks.length}</span>
+              </span>
+              <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
+                Поиск: <span className="ml-1 font-medium text-brand-ink">{query.trim() ? "активен" : "все"}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="relative p-4 md:p-5">
+          {releaseArchiveTracks.length ? (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {releaseArchiveTracks.map((track) => {
+                const meta = track.releaseArchiveMeta;
+                if (!meta) return null;
+                const releaseKind = meta.releaseKind ?? track.project?.releaseKind ?? "SINGLE";
+                const coverStyle = buildProjectCoverStyle({
+                  releaseKind: releaseKind === "ALBUM" ? "ALBUM" : "SINGLE",
+                  coverType: meta.coverType === "IMAGE" ? "IMAGE" : "GRADIENT",
+                  coverImageUrl: meta.coverImageUrl ?? track.project?.coverImageUrl ?? null,
+                  coverPresetKey: meta.coverPresetKey ?? track.project?.coverPresetKey ?? null,
+                  coverColorA: meta.coverColorA ?? track.project?.coverColorA ?? null,
+                  coverColorB: meta.coverColorB ?? track.project?.coverColorB ?? null
+                });
+                const archiveTitle = meta.title || track.title;
+                const archiveArtist = meta.artistName || track.project?.artistLabel || "Артист не указан";
+                const archiveDateLabel = meta.releaseDate ? formatReleaseArchiveDate(meta.releaseDate) : null;
+                const archiveMetaLine = archiveDateLabel
+                  ? `${archiveDateLabel} • ${releaseKindLabelRu(releaseKind)}`
+                  : `Дата не указана • ${releaseKindLabelRu(releaseKind)}`;
+
+                return (
+                  <Link key={track.id} href={`/songs/${track.id}`} className="group block">
+                    <div className="overflow-hidden rounded-2xl border border-brand-border bg-white/90 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                      <div className="relative aspect-square" style={coverStyle}>
+                        <div className="absolute inset-0 bg-gradient-to-b from-black/5 via-transparent to-black/20" />
+                        <div className="absolute left-3 top-3 rounded-lg bg-black/25 px-2 py-1 text-[11px] font-medium text-white backdrop-blur">
+                          {releaseKindLabelRu(releaseKind)}
+                        </div>
+                      </div>
+                      <div className="bg-[#111214] px-3 py-3">
+                        <p className="truncate text-[15px] font-semibold text-white">{archiveTitle}</p>
+                        <p className="truncate text-sm text-white/75">{archiveArtist}</p>
+                        <p className="truncate text-sm text-white/55">{archiveMetaLine}</p>
+                      </div>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-brand-border bg-white/75 p-4 text-sm text-brand-muted shadow-sm">
+              По текущему поиску релизных треков пока нет.
+            </div>
+          )}
+        </div>
+      </Card>
 
       {false && <Card className="overflow-hidden rounded-3xl border border-brand-border bg-gradient-to-br from-[#f4f8ee] via-[#eff4e8] to-[#e8efde] p-0 shadow-sm">
         <div className="border-b border-brand-border px-4 py-4 md:px-5">
@@ -1199,16 +1502,14 @@ export default function SongsPage() {
             const colorA = project.coverColorA || "#D9F99D";
             const colorB = project.coverColorB || "#65A30D";
             const playButtonAccentStyle = playbackAccentButtonStyle({ colorA, colorB });
-            const coverStyle =
-              project.coverType === "IMAGE" && project.coverImageUrl
-                ? ({
-                    backgroundImage: `url(${project.coverImageUrl})`,
-                    backgroundSize: "cover",
-                    backgroundPosition: "center"
-                  } as const)
-                : ({
-                    background: `linear-gradient(145deg, ${colorA}, ${colorB})`
-                  } as const);
+            const coverStyle = buildProjectCoverStyle({
+              releaseKind: project.releaseKind ?? "ALBUM",
+              coverType: project.coverType,
+              coverImageUrl: project.coverImageUrl,
+              coverPresetKey: project.coverPresetKey,
+              coverColorA: colorA,
+              coverColorB: colorB
+            });
 
             return (
               <div
@@ -1263,12 +1564,19 @@ export default function SongsPage() {
                     )}
                   </div>
                 </div>
-                <Link href={`/songs/projects/${project.id}`} className="group block">
+                <Link
+                  href={getProjectOpenHref({
+                    id: project.id,
+                    releaseKind: project.releaseKind ?? "ALBUM",
+                    singleTrackId: project.singleTrackId ?? null
+                  })}
+                  className="group block"
+                >
                   <div className="relative mb-3 aspect-square overflow-hidden rounded-2xl" style={coverStyle}>
                     <div className="absolute inset-0 bg-gradient-to-br from-white/10 via-transparent to-black/20" />
                     <button
                       type="button"
-                      className="absolute bottom-2 left-2 z-[1] grid h-11 w-11 place-items-center rounded-xl border text-lg backdrop-blur hover:brightness-95"
+                      className="absolute bottom-2 left-2 z-[1] grid h-11 w-11 place-items-center rounded-full border text-lg backdrop-blur hover:brightness-95"
                       style={playButtonAccentStyle}
                       onClick={(event) => {
                         event.preventDefault();
@@ -1305,12 +1613,6 @@ export default function SongsPage() {
         </div>
       </Card>}
 
-      <div className="flex justify-end">
-        <Button variant="secondary" onClick={() => setShowLegacyLibrary((prev) => !prev)}>
-          {showLegacyLibrary ? "Скрыть legacy список" : "Показать legacy список"}
-        </Button>
-      </div>
-
       {showLegacyLibrary && <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <div className="space-y-6">
           <Card className="rounded-2xl">
@@ -1339,7 +1641,14 @@ export default function SongsPage() {
                   {folderProjects.length > 0 ? (
                     <div className="grid gap-3 md:grid-cols-2">
                       {folderProjects.map((project) => (
-                        <Link key={project.id} href={`/songs/projects/${project.id}`}>
+                        <Link
+                          key={project.id}
+                          href={getProjectOpenHref({
+                            id: project.id,
+                            releaseKind: project.releaseKind ?? "ALBUM",
+                            singleTrackId: project.singleTrackId ?? null
+                          })}
+                        >
                           <div className="rounded-xl border border-brand-border bg-white p-3 transition hover:-translate-y-0.5 hover:border-[#2A342C]">
                             <p className="font-medium text-brand-ink">{project.title}</p>
                             <p className="text-xs text-brand-muted">
@@ -1373,6 +1682,13 @@ export default function SongsPage() {
                       <p className="text-xs text-brand-muted">
                         {track.pathStage?.name ?? "Не выбран"} • Демо: {track._count?.demos ?? 0}
                       </p>
+                      <SongAnalysisBadges
+                        bpm={track.displayBpm}
+                        keyRoot={track.displayKeyRoot}
+                        keyMode={track.displayKeyMode}
+                        className="mt-1"
+                        compact
+                      />
                       <p className="text-xs text-brand-muted">Обновлено: {formatDate(track.updatedAt)}</p>
                     </Link>
                     <Button
@@ -1441,6 +1757,13 @@ export default function SongsPage() {
                     <p className="text-xs text-brand-muted">
                       {track.pathStage?.name ?? "Без статуса"} • {formatDate(track.updatedAt)}
                     </p>
+                    <SongAnalysisBadges
+                      bpm={track.displayBpm}
+                      keyRoot={track.displayKeyRoot}
+                      keyMode={track.displayKeyMode}
+                      className="mt-1"
+                      compact
+                    />
                   </div>
                 </Link>
               ))}
@@ -1503,14 +1826,6 @@ export default function SongsPage() {
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="border-brand-border bg-white text-brand-ink hover:bg-white"
-                      onClick={handleSongFlowSkipLyrics}
-                    >
-                      Пропустить этот шаг
-                    </Button>
                     <Button type="button" onClick={handleSongFlowContinueWithLyrics}>
                       Далее
                     </Button>
@@ -1608,14 +1923,23 @@ export default function SongsPage() {
                     type="file"
                     accept="audio/*"
                     className="hidden"
-                    onChange={(event) => {
-                      setSongFlowFile(event.target.files?.[0] ?? null);
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0] ?? null;
+                      setSongFlowFile(file);
                       setSongFlowError("");
+                      setSongFlowFileAnalysis(file ? await detectAudioAnalysisMvp(file) : null);
                     }}
                   />
                   {songFlowFile ? (
                     <div className="rounded-xl border border-brand-border bg-white/85 px-3 py-2 text-sm text-brand-ink">
-                      Файл: {songFlowFile.name}
+                      <p>Файл: {songFlowFile.name}</p>
+                      <SongAnalysisBadges
+                        bpm={songFlowFileAnalysis?.bpm}
+                        keyRoot={songFlowFileAnalysis?.keyRoot}
+                        keyMode={songFlowFileAnalysis?.keyMode}
+                        className="mt-1"
+                        compact
+                      />
                     </div>
                   ) : (
                     <div className="rounded-xl border border-dashed border-brand-border bg-white/70 px-3 py-3 text-sm text-brand-muted">
@@ -1631,13 +1955,17 @@ export default function SongsPage() {
                   selectionMode={songFlowSelectionMode}
                   selectedProjectId={songFlowSelectedProjectId}
                   newProjectTitle={songFlowNewProjectTitle}
+                  newProjectReleaseKind={songFlowNewProjectReleaseKind}
                   onSelectionModeChange={setSongFlowSelectionMode}
                   onSelectedProjectIdChange={setSongFlowSelectedProjectId}
                   onNewProjectTitleChange={setSongFlowNewProjectTitle}
+                  onNewProjectReleaseKindChange={setSongFlowNewProjectReleaseKind}
+                  singleTrackTitle={songFlowDraft.title}
                   onConfirm={() => void confirmSongFlowProjectStep()}
                   confirmLabel={songFlowDraft.branch === "TEXT_ONLY" ? "Сохранить только текст" : "Сохранить песню"}
                   busy={songFlowSaving}
                   error={songFlowError}
+                  allowNewProjectKindChoice
                   modeLabel={
                     songFlowDraft.branch === "TEXT_ONLY"
                       ? "Сохраним песню как этап «Идея» без аудио."
@@ -1694,6 +2022,7 @@ export default function SongsPage() {
                 <option value="NO_MIX">Запись без сведения</option>
                 <option value="MIXED">С сведением</option>
                 <option value="MASTERED">С мастерингом</option>
+                <option value="RELEASE">Релиз</option>
               </Select>
 
               {demoVersionType !== "IDEA_TEXT" && (
@@ -1720,19 +2049,50 @@ export default function SongsPage() {
                 type="file"
                 accept="audio/*"
                 className="hidden"
-                onChange={(event) => setDemoFile(event.target.files?.[0] ?? null)}
+                onChange={async (event) => {
+                  const file = event.target.files?.[0] ?? null;
+                  setDemoFile(file);
+                  setDemoFileAnalysis(file ? await detectAudioAnalysisMvp(file) : null);
+                }}
               />
-              {demoMode === "upload" && demoFile && <p className="text-xs text-brand-muted">Файл: {demoFile.name}</p>}
+              {demoMode === "upload" && demoFile && (
+                <div className="rounded-xl border border-brand-border bg-white/75 px-3 py-2 text-xs text-brand-muted">
+                  <p>Файл: {demoFile.name}</p>
+                  <SongAnalysisBadges
+                    bpm={demoFileAnalysis?.bpm}
+                    keyRoot={demoFileAnalysis?.keyRoot}
+                    keyMode={demoFileAnalysis?.keyMode}
+                    className="mt-1"
+                    compact
+                  />
+                </div>
+              )}
 
               {demoVersionType === "DEMO" && demoMode === "record" && (
                 <MultiTrackRecorder
                   resetKey={recorderResetKey}
                   onError={setDemoError}
-                  onReset={() => setRecordedMix(null)}
+                  onReset={() => {
+                    setRecordedMix(null);
+                    setRecordedMixAnalysis(null);
+                  }}
                   onReady={(payload) => {
                     setRecordedMix(payload);
+                    void detectAudioAnalysisMvp(payload.blob).then(setRecordedMixAnalysis).catch(() => setRecordedMixAnalysis(null));
                   }}
                 />
+              )}
+              {demoVersionType === "DEMO" && demoMode === "record" && recordedMix && (
+                <div className="rounded-xl border border-brand-border bg-white/75 px-3 py-2 text-xs text-brand-muted">
+                  <p>Сведённый микс: {recordedMix.filename}</p>
+                  <SongAnalysisBadges
+                    bpm={recordedMixAnalysis?.bpm}
+                    keyRoot={recordedMixAnalysis?.keyRoot}
+                    keyMode={recordedMixAnalysis?.keyMode}
+                    className="mt-1"
+                    compact
+                  />
+                </div>
               )}
 
               <div className="space-y-1">

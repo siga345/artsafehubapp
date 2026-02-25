@@ -1,8 +1,10 @@
 "use client";
 
 import { useMemo } from "react";
+import { ChevronRight, Folder, Home } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import type { FolderListItem, WorkspaceNode } from "@/components/songs/workspace-types";
 
 type MoveNodeModalProps = {
@@ -40,6 +42,18 @@ function buildRows(folders: FolderListItem[]) {
   return rows;
 }
 
+function disabledReasonLabel(reason: string | null) {
+  if (!reason) return null;
+  if (reason === "same") return "Текущая папка";
+  if (reason === "descendant") return "Нельзя в дочернюю";
+  if (reason === "depth") return "Слишком глубоко";
+  return reason;
+}
+
+function statusLabel(reason: string | null) {
+  return reason ? disabledReasonLabel(reason) : "Переместить сюда";
+}
+
 export function MoveNodeModal({
   open,
   node,
@@ -68,13 +82,23 @@ export function MoveNodeModal({
         <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
           <button
             type="button"
-            className="flex w-full items-center justify-between rounded-2xl border border-brand-border bg-white px-3 py-2 text-left hover:bg-[#f0f5e8] disabled:cursor-not-allowed disabled:opacity-50"
+            className="group flex w-full items-center justify-between rounded-2xl border border-brand-border bg-white px-3 py-2 text-left shadow-sm transition hover:-translate-y-0.5 hover:bg-[#f0f5e8] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-sm"
             onClick={() => onMove(null)}
             disabled={Boolean(rootDisabledReason) || loading}
-            title={rootDisabledReason ?? undefined}
+            title={disabledReasonLabel(rootDisabledReason) ?? undefined}
           >
-            <span className="font-medium text-brand-ink">HOME</span>
-            {rootDisabledReason ? <span className="text-xs text-red-600">{rootDisabledReason}</span> : <span className="text-xs text-brand-muted">Move here</span>}
+            <span className="flex min-w-0 items-center gap-3">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-brand-border bg-[#edf4e5] text-brand-ink">
+                <Home className="h-4 w-4" />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate font-medium text-brand-ink">Главная папка</span>
+                <span className="block text-xs text-brand-muted">Корень workspace</span>
+              </span>
+            </span>
+            <Badge className={`shrink-0 ${rootDisabledReason ? "border-red-200 bg-red-50 text-red-700" : "bg-white"}`}>
+              {statusLabel(rootDisabledReason)}
+            </Badge>
           </button>
 
           {rows.map((folder) => {
@@ -83,19 +107,29 @@ export function MoveNodeModal({
               <button
                 key={folder.id}
                 type="button"
-                className="flex w-full items-center justify-between rounded-2xl border border-brand-border bg-white px-3 py-2 text-left hover:bg-[#f0f5e8] disabled:cursor-not-allowed disabled:opacity-50"
+                className="group flex w-full items-center justify-between rounded-2xl border border-brand-border bg-white px-3 py-2 text-left shadow-sm transition hover:-translate-y-0.5 hover:bg-[#f0f5e8] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-sm"
                 onClick={() => onMove(folder.id)}
                 disabled={Boolean(disabledReason) || loading}
-                title={disabledReason ?? undefined}
+                title={disabledReasonLabel(disabledReason) ?? undefined}
               >
-                <span
-                  className="min-w-0 truncate font-medium text-brand-ink"
-                  style={{ paddingLeft: `${folder.depth * 16}px` }}
-                >
-                  {folder.depth > 0 ? "↳ " : ""}
-                  {folder.title}
+                <span className="flex min-w-0 items-center gap-3">
+                  <span style={{ width: `${folder.depth * 14}px` }} aria-hidden />
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-brand-border bg-[#edf4e5] text-brand-ink">
+                    <Folder className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1 truncate font-medium text-brand-ink">
+                      {folder.depth > 0 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-brand-muted" />}
+                      <span className="truncate">{folder.title}</span>
+                    </span>
+                    <span className="block text-xs text-brand-muted">
+                      {folder.depth === 0 ? "Верхний уровень" : `Уровень ${folder.depth + 1}`}
+                    </span>
+                  </span>
                 </span>
-                {disabledReason ? <span className="text-xs text-red-600">{disabledReason}</span> : <span className="text-xs text-brand-muted">Move here</span>}
+                <Badge className={`shrink-0 ${disabledReason ? "border-red-200 bg-red-50 text-red-700" : "bg-white"}`}>
+                  {statusLabel(disabledReason)}
+                </Badge>
               </button>
             );
           })}
@@ -105,7 +139,7 @@ export function MoveNodeModal({
 
         <div className="mt-4 flex justify-end">
           <Button variant="secondary" onClick={onClose} disabled={loading}>
-            Cancel
+            Закрыть
           </Button>
         </div>
       </div>

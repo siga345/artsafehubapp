@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 const GLOBAL_PLAYBACK_SOURCE_ID = "songs-global-player";
 const AUDIO_FOCUS_EVENT = "artsafehub:audio-focus";
@@ -36,6 +36,8 @@ type SongsPlaybackQueueContext = {
   title?: string;
 } | null;
 
+export type SongsPlaybackRepeatMode = "off" | "queue" | "track";
+
 type SongsPlaybackContextValue = {
   activeItem: SongsPlaybackItem | null;
   queue: SongsPlaybackItem[];
@@ -44,6 +46,8 @@ type SongsPlaybackContextValue = {
   playing: boolean;
   currentTime: number;
   duration: number;
+  repeatMode: SongsPlaybackRepeatMode;
+  shuffleEnabled: boolean;
   canNext: boolean;
   canPrevious: boolean;
   isPlayerWindowOpen: boolean;
@@ -55,18 +59,55 @@ type SongsPlaybackContextValue = {
   previous: () => void;
   seek: (seconds: number) => void;
   restart: () => void;
+  cycleRepeatMode: () => void;
+  toggleShuffle: () => void;
   clear: () => void;
   openPlayerWindow: () => void;
   closePlayerWindow: () => void;
   togglePlayerWindow: () => void;
+  getOrCreateAnalyserNode: () => AnalyserNode | null;
+  resumeAnalyserContext: () => Promise<void>;
   isActive: (demoId: string) => boolean;
   isPlayingDemo: (demoId: string) => boolean;
 };
 
 const SongsPlaybackContext = createContext<SongsPlaybackContextValue | null>(null);
 
+type AudioContextCtor = typeof AudioContext;
+
+function getAudioContextCtor(): AudioContextCtor | null {
+  if (typeof window === "undefined") return null;
+  const webkitWindow = window as Window & typeof globalThis & { webkitAudioContext?: AudioContextCtor };
+  return window.AudioContext || webkitWindow.webkitAudioContext || null;
+}
+
+function shuffleArray<T>(items: T[]) {
+  const result = [...items];
+  for (let idx = result.length - 1; idx > 0; idx -= 1) {
+    const swapIdx = Math.floor(Math.random() * (idx + 1));
+    [result[idx], result[swapIdx]] = [result[swapIdx], result[idx]];
+  }
+  return result;
+}
+
+function findItemIndex(items: SongsPlaybackItem[], target: SongsPlaybackItem | null) {
+  if (!target) return -1;
+  const byRef = items.findIndex((item) => item === target);
+  if (byRef >= 0) return byRef;
+  return items.findIndex((item) => item.demoId === target.demoId);
+}
+
+function shuffleQueuePreservingIndex(items: SongsPlaybackItem[], keepIndex: number) {
+  if (items.length <= 1) return [...items];
+  const safeIndex = Math.min(Math.max(keepIndex, 0), items.length - 1);
+  const active = items[safeIndex];
+  const rest = shuffleArray(items.filter((_, idx) => idx !== safeIndex));
+  return [...rest.slice(0, safeIndex), active, ...rest.slice(safeIndex)];
+}
+
 export function SongsPlaybackProvider({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
+  const [originalQueue, setOriginalQueue] = useState<SongsPlaybackItem[]>([]);
   const [queue, setQueue] = useState<SongsPlaybackItem[]>([]);
   const [queueIndex, setQueueIndex] = useState(0);
   const [queueContext, setQueueContext] = useState<SongsPlaybackQueueContext>(null);
@@ -74,11 +115,17 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [repeatMode, setRepeatMode] = useState<SongsPlaybackRepeatMode>("off");
+  const [shuffleEnabled, setShuffleEnabled] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaSourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const analyserNodeRef = useRef<AnalyserNode | null>(null);
+  const webAudioUnsupportedRef = useRef(false);
 
   const activeItem = queue[queueIndex] ?? null;
-  const canPrevious = queueIndex > 0;
-  const canNext = queueIndex >= 0 && queueIndex < queue.length - 1;
+  const canPrevious = queue.length > 0 && (queueIndex > 0 || (repeatMode === "queue" && queue.length > 1));
+  const canNext = queue.length > 0 && (queueIndex < queue.length - 1 || (repeatMode === "queue" && queue.length > 1));
 
   useEffect(() => {
     setMounted(true);
@@ -103,15 +150,89 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
     audio.play().catch(() => null);
   }, [activeItem?.demoId]);
 
+  useEffect(
+    () => () => {
+      try {
+        analyserNodeRef.current?.disconnect();
+      } catch {
+        // ignore cleanup errors
+      }
+      try {
+        mediaSourceNodeRef.current?.disconnect();
+      } catch {
+        // ignore cleanup errors
+      }
+      const ctx = audioContextRef.current;
+      if (ctx) {
+        void ctx.close().catch(() => null);
+      }
+      analyserNodeRef.current = null;
+      mediaSourceNodeRef.current = null;
+      audioContextRef.current = null;
+    },
+    []
+  );
+
+  const getOrCreateAnalyserNode = useCallback((): AnalyserNode | null => {
+    if (webAudioUnsupportedRef.current) return null;
+    if (analyserNodeRef.current) return analyserNodeRef.current;
+
+    const audio = audioRef.current;
+    if (!audio) return null;
+
+    const AudioContextImpl = getAudioContextCtor();
+    if (!AudioContextImpl) {
+      webAudioUnsupportedRef.current = true;
+      return null;
+    }
+
+    try {
+      const ctx = audioContextRef.current ?? new AudioContextImpl();
+      audioContextRef.current = ctx;
+
+      const source = mediaSourceNodeRef.current ?? ctx.createMediaElementSource(audio);
+      mediaSourceNodeRef.current = source;
+
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.7;
+      analyser.minDecibels = -90;
+      analyser.maxDecibels = -10;
+
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
+
+      analyserNodeRef.current = analyser;
+      return analyser;
+    } catch {
+      webAudioUnsupportedRef.current = true;
+      return null;
+    }
+  }, []);
+
+  const resumeAnalyserContext = useCallback(async () => {
+    if (webAudioUnsupportedRef.current) return;
+    const analyser = analyserNodeRef.current ?? getOrCreateAnalyserNode();
+    if (!analyser) return;
+    const ctx = audioContextRef.current;
+    if (!ctx) return;
+    if (ctx.state === "suspended") {
+      await ctx.resume();
+    }
+  }, [getOrCreateAnalyserNode]);
+
   function setPlaybackTarget(nextQueue: SongsPlaybackItem[], nextIndex: number, nextContext: SongsPlaybackQueueContext) {
     const safeQueue = nextQueue.filter((item) => Boolean(item?.src));
     if (!safeQueue.length) return;
     const clampedIndex = Math.min(Math.max(nextIndex, 0), safeQueue.length - 1);
-    setQueue(safeQueue);
-    setQueueIndex(clampedIndex);
+    const nextPlaybackQueue = shuffleEnabled ? shuffleQueuePreservingIndex(safeQueue, clampedIndex) : safeQueue;
+    const nextPlaybackIndex = shuffleEnabled ? findItemIndex(nextPlaybackQueue, safeQueue[clampedIndex]) : clampedIndex;
+    setOriginalQueue(safeQueue);
+    setQueue(nextPlaybackQueue);
+    setQueueIndex(nextPlaybackIndex >= 0 ? nextPlaybackIndex : clampedIndex);
     setQueueContext(nextContext ?? null);
     setCurrentTime(0);
-    setDuration(safeQueue[clampedIndex]?.durationSec ?? 0);
+    setDuration((nextPlaybackQueue[nextPlaybackIndex >= 0 ? nextPlaybackIndex : clampedIndex] ?? safeQueue[clampedIndex])?.durationSec ?? 0);
   }
 
   function play(item: SongsPlaybackItem) {
@@ -156,15 +277,56 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
   }
 
   function previous() {
-    if (!canPrevious) return;
-    setQueueIndex((prev) => Math.max(0, prev - 1));
+    if (!queue.length) return;
+    if (queueIndex > 0) {
+      setQueueIndex((prev) => Math.max(0, prev - 1));
+    } else if (repeatMode === "queue" && queue.length > 1) {
+      setQueueIndex(queue.length - 1);
+    } else {
+      return;
+    }
     setCurrentTime(0);
   }
 
   function next() {
-    if (!canNext) return;
-    setQueueIndex((prev) => Math.min(queue.length - 1, prev + 1));
+    if (!queue.length) return;
+    if (queueIndex < queue.length - 1) {
+      setQueueIndex((prev) => Math.min(queue.length - 1, prev + 1));
+    } else if (repeatMode === "queue" && queue.length > 1) {
+      setQueueIndex(0);
+    } else {
+      return;
+    }
     setCurrentTime(0);
+  }
+
+  function cycleRepeatMode() {
+    setRepeatMode((prev) => {
+      if (prev === "off") return "queue";
+      if (prev === "queue") return "track";
+      return "off";
+    });
+  }
+
+  function toggleShuffle() {
+    const nextEnabled = !shuffleEnabled;
+    setShuffleEnabled(nextEnabled);
+
+    if (!originalQueue.length) return;
+
+    const currentItem = activeItem;
+    if (!nextEnabled) {
+      setQueue(originalQueue);
+      const restoredIndex = findItemIndex(originalQueue, currentItem);
+      setQueueIndex(restoredIndex >= 0 ? restoredIndex : 0);
+      return;
+    }
+
+    const originalActiveIndex = findItemIndex(originalQueue, currentItem);
+    const shuffledQueue = shuffleQueuePreservingIndex(originalQueue, originalActiveIndex >= 0 ? originalActiveIndex : 0);
+    setQueue(shuffledQueue);
+    const shuffledIndex = findItemIndex(shuffledQueue, currentItem);
+    setQueueIndex(shuffledIndex >= 0 ? shuffledIndex : 0);
   }
 
   function clear() {
@@ -174,6 +336,7 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
       audio.removeAttribute("src");
       audio.load();
     }
+    setOriginalQueue([]);
     setQueue([]);
     setQueueIndex(0);
     setQueueContext(null);
@@ -204,6 +367,8 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
   const visiblePlaying = mounted ? playing : false;
   const visibleCurrentTime = mounted ? currentTime : 0;
   const visibleDuration = mounted ? duration : 0;
+  const visibleRepeatMode = mounted ? repeatMode : "off";
+  const visibleShuffleEnabled = mounted ? shuffleEnabled : false;
   const visibleCanNext = mounted ? canNext : false;
   const visibleCanPrevious = mounted ? canPrevious : false;
   const visiblePlayerWindowOpen = mounted ? isPlayerWindowOpen : false;
@@ -217,6 +382,8 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
       playing: visiblePlaying,
       currentTime: visibleCurrentTime,
       duration: visibleDuration,
+      repeatMode: visibleRepeatMode,
+      shuffleEnabled: visibleShuffleEnabled,
       canNext: visibleCanNext,
       canPrevious: visibleCanPrevious,
       isPlayerWindowOpen: visiblePlayerWindowOpen,
@@ -228,10 +395,14 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
       previous,
       seek,
       restart,
+      cycleRepeatMode,
+      toggleShuffle,
       clear,
       openPlayerWindow,
       closePlayerWindow,
       togglePlayerWindow,
+      getOrCreateAnalyserNode,
+      resumeAnalyserContext,
       isActive: (demoId: string) => visibleActiveItem?.demoId === demoId,
       isPlayingDemo: (demoId: string) => visibleActiveItem?.demoId === demoId && visiblePlaying
     }),
@@ -241,11 +412,15 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
       visibleCanPrevious,
       visibleCurrentTime,
       visibleDuration,
+      visibleRepeatMode,
+      visibleShuffleEnabled,
       visiblePlayerWindowOpen,
       visiblePlaying,
       visibleQueue,
       visibleQueueContext,
-      visibleQueueIndex
+      visibleQueueIndex,
+      getOrCreateAnalyserNode,
+      resumeAnalyserContext
     ]
   );
 
@@ -258,6 +433,7 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
           src={activeItem?.src ?? undefined}
           preload="metadata"
           onPlay={() => {
+            void resumeAnalyserContext().catch(() => null);
             setPlaying(true);
             window.dispatchEvent(new CustomEvent(AUDIO_FOCUS_EVENT, { detail: { sourceId: GLOBAL_PLAYBACK_SOURCE_ID } }));
           }}
@@ -265,8 +441,21 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
           onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
           onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || activeItem?.durationSec || 0)}
           onEnded={() => {
+            if (repeatMode === "track") {
+              const audio = audioRef.current;
+              if (!audio) return;
+              audio.currentTime = 0;
+              setCurrentTime(0);
+              audio.play().catch(() => null);
+              return;
+            }
             if (queueIndex < queue.length - 1) {
               setQueueIndex((prev) => Math.min(queue.length - 1, prev + 1));
+              setCurrentTime(0);
+              return;
+            }
+            if (repeatMode === "queue" && queue.length > 0) {
+              setQueueIndex(0);
               setCurrentTime(0);
               return;
             }

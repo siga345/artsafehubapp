@@ -2,7 +2,9 @@
 
 import { type FormEvent, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Building2, Clock3, Globe, MapPin, Search, Send, SlidersHorizontal, UserRound, Wallet } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -34,7 +36,7 @@ type SongTrack = {
   title: string;
 };
 
-type DemoVersionType = "IDEA_TEXT" | "DEMO" | "ARRANGEMENT" | "NO_MIX" | "MIXED" | "MASTERED";
+type DemoVersionType = "IDEA_TEXT" | "DEMO" | "ARRANGEMENT" | "NO_MIX" | "MIXED" | "MASTERED" | "RELEASE";
 
 type SongVersion = {
   id: string;
@@ -54,11 +56,20 @@ const versionTypeLabels: Record<DemoVersionType, string> = {
   ARRANGEMENT: "Продакшн",
   NO_MIX: "Запись без сведения",
   MIXED: "Сведение",
-  MASTERED: "Мастеринг"
+  MASTERED: "Мастеринг",
+  RELEASE: "Релиз"
 };
 
 async function fetcher<T>(url: string): Promise<T> {
   return apiFetchJson<T>(url);
+}
+
+function normalizeTelegramLink(value: string | null | undefined) {
+  const raw = value?.trim();
+  if (!raw) return null;
+  if (/^(https?:\/\/|tg:\/\/)/i.test(raw)) return raw;
+  const username = raw.replace(/^@/, "");
+  return username ? `https://t.me/${username}` : null;
 }
 
 const categoryLabels: Record<string, string> = {
@@ -172,9 +183,83 @@ export default function FindPage() {
 
   return (
     <div className="space-y-6">
-      <section className="app-glass space-y-2 p-4 md:p-6">
-        <h1 className="text-3xl font-semibold tracking-tight text-brand-ink">FIND</h1>
-        <p className="text-sm text-brand-muted">Ищи продюсеров, инженеров и студии по задаче и формату работы.</p>
+      <section className="app-glass relative overflow-hidden p-4 md:p-6">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_0%,rgba(217,249,157,0.45),transparent_40%),radial-gradient(circle_at_100%_100%,rgba(42,52,44,0.1),transparent_50%)]" />
+        <div className="pointer-events-none absolute -right-8 top-4 h-28 w-28 rounded-full bg-[#d9f99d]/35 blur-2xl" />
+
+        <div className="relative space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="mb-2 inline-flex items-center gap-2 rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">
+                <span className="-rotate-6 inline-flex h-5 w-5 items-center justify-center rounded-md border border-brand-border bg-white shadow-[0_1px_0_rgba(42,52,44,0.08)]">
+                  <Search className="h-3 w-3 text-brand-ink" />
+                </span>
+                Find
+              </div>
+              <h1 className="text-3xl font-semibold tracking-tight text-brand-ink">Найди своего специалиста</h1>
+              <p className="mt-1 text-sm text-brand-muted">
+                Продюсеры, инженеры и студии по задаче, формату работы и городу.
+              </p>
+            </div>
+            <div className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-3 py-1.5 text-xs text-brand-muted shadow-sm">
+              Найдено: <span className="ml-1 font-semibold text-brand-ink">{filtered.length}</span>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-brand-border bg-white/75 p-3 shadow-sm backdrop-blur-sm">
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.25fr)_auto]">
+              <label className="relative block">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-muted" />
+                <Input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Кого ищем? Например: звукорежиссер для сведения демо"
+                  className="h-11 border-brand-border bg-white pl-9"
+                />
+              </label>
+
+              <label className="flex h-11 items-center gap-2 rounded-xl border border-brand-border bg-white px-3 text-sm text-brand-ink shadow-sm">
+                <input
+                  type="checkbox"
+                  className="app-checkbox"
+                  checked={availableNow}
+                  onChange={(event) => setAvailableNow(event.target.checked)}
+                />
+                Доступен сейчас
+              </label>
+            </div>
+
+            <div className="mt-3 rounded-xl border border-brand-border/70 bg-[#f7fbf2] p-3">
+              <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">
+                <SlidersHorizontal className="h-3.5 w-3.5 text-brand-ink" />
+                Filters
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <Select value={category} onChange={(event) => setCategory(event.target.value)} className="bg-white">
+                  <option value="ALL">Все категории</option>
+                  <option value="PRODUCER">Продюсер / продакшн</option>
+                  <option value="AUDIO_ENGINEER">Звукорежиссёр</option>
+                  <option value="RECORDING_STUDIO">Студия</option>
+                  <option value="PROMO_CREW">Промо-команда</option>
+                </Select>
+                <Select value={mode} onChange={(event) => setMode(event.target.value)} aria-label="Формат работы" className="bg-white">
+                  <option value="ALL">Онлайн и офлайн</option>
+                  <option value="ONLINE">Только онлайн</option>
+                  <option value="CITY">Только в городе / офлайн</option>
+                </Select>
+                <label className="relative block">
+                  <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-muted" />
+                  <Input
+                    value={city}
+                    onChange={(event) => setCity(event.target.value)}
+                    placeholder="Город (опционально)"
+                    className="bg-white pl-9"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       {feedback && (
@@ -183,85 +268,209 @@ export default function FindPage() {
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Поиск специалистов</CardTitle>
-          <CardDescription>Фильтры для студий и специалистов.</CardDescription>
-        </CardHeader>
-        <div className="grid gap-3 md:grid-cols-5">
-          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Кого ищем?" />
-          <Select value={category} onChange={(event) => setCategory(event.target.value)}>
-            <option value="ALL">Все категории</option>
-            <option value="PRODUCER">Продюсер / продакшн</option>
-            <option value="AUDIO_ENGINEER">Звукорежиссёр</option>
-            <option value="RECORDING_STUDIO">Студия</option>
-            <option value="PROMO_CREW">Промо-команда</option>
-          </Select>
-          <Select value={mode} onChange={(event) => setMode(event.target.value)} aria-label="Формат работы">
-            <option value="ALL">Онлайн и офлайн</option>
-            <option value="ONLINE">Только онлайн</option>
-            <option value="CITY">Только в городе / офлайн</option>
-          </Select>
-          <Input value={city} onChange={(event) => setCity(event.target.value)} placeholder="Город (опционально)" />
-          <label className="flex items-center gap-2 rounded-xl border border-brand-border bg-white px-3 py-2 text-sm text-brand-ink">
-            <input
-              type="checkbox"
-              className="app-checkbox"
-              checked={availableNow}
-              onChange={(event) => setAvailableNow(event.target.checked)}
-            />
-            Доступен сейчас
-          </label>
-        </div>
-      </Card>
-
       <div className="grid gap-4 md:grid-cols-2">
         {filtered.map((item) => {
           const profile = item.specialistProfile;
           const isStudio = profile?.category === "RECORDING_STUDIO";
+          const isPromoCrew = profile?.category === "PROMO_CREW";
+          const telegramLink = normalizeTelegramLink(profile?.contactTelegram);
           const services = profile?.services ?? [];
           const credits = profile?.credits ?? [];
+          const categoryLabel = (profile?.category && categoryLabels[profile.category]) || "Категория не указана";
+          const locationLabel = profile?.isOnline ? "Онлайн" : profile?.city ?? "Офлайн";
+          const availabilityLabel = isStudio
+            ? profile?.isAvailableNow
+              ? "Доступна сейчас"
+              : "Сейчас занята"
+            : profile?.isAvailableNow
+              ? "Доступен сейчас"
+              : "Сейчас занят";
+          const budgetLabel = isStudio
+            ? profile?.budgetFrom
+              ? `от ${profile.budgetFrom} ₽/ч`
+              : "цена по запросу"
+            : profile?.budgetFrom
+              ? `от ${profile.budgetFrom} ₽`
+              : "бюджет по запросу";
 
           return (
-            <Card key={item.id} className="space-y-3">
-              <CardHeader>
-                <CardTitle>{item.nickname}</CardTitle>
-                <CardDescription>
-                  {(profile?.category && categoryLabels[profile.category]) || "Категория не указана"} •{" "}
-                  {profile?.isOnline ? "Онлайн" : profile?.city ?? "Офлайн"}
-                </CardDescription>
-              </CardHeader>
+            <Card key={item.id} className="relative overflow-hidden p-0">
+              <div
+                className={`pointer-events-none absolute inset-0 ${
+                  isStudio
+                    ? "bg-[radial-gradient(circle_at_0%_0%,rgba(186,230,253,0.25),transparent_35%),radial-gradient(circle_at_100%_100%,rgba(217,249,157,0.14),transparent_40%)]"
+                    : "bg-[radial-gradient(circle_at_0%_0%,rgba(217,249,157,0.22),transparent_35%),radial-gradient(circle_at_100%_100%,rgba(253,230,138,0.14),transparent_40%)]"
+                }`}
+              />
 
-              <div className="space-y-2 text-sm text-brand-muted">
-                <p>SAFE ID: {item.safeId}</p>
+              <div className="relative">
+                <div
+                  className={`relative overflow-hidden border-b border-brand-border p-4 ${
+                    isStudio
+                      ? "bg-gradient-to-br from-[#eef5fb] via-[#edf6f7] to-[#e6efe8]"
+                      : "bg-gradient-to-br from-[#f4f8ee] via-[#f3f1e7] to-[#edf3e4]"
+                  }`}
+                >
+                  <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full bg-white/40 blur-2xl" />
+                  <div className="relative space-y-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <Badge className="bg-white">
+                            {isStudio ? <Building2 className="mr-1 h-3 w-3" /> : <UserRound className="mr-1 h-3 w-3" />}
+                            {isStudio ? "Studio" : "Specialist"}
+                          </Badge>
+                          <Badge className="bg-white">{categoryLabel}</Badge>
+                        </div>
+                        <p className="truncate text-xl font-semibold tracking-tight text-brand-ink">{item.nickname}</p>
+                        <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-brand-muted">
+                          <span className="inline-flex items-center gap-1">
+                            <MapPin className="h-3.5 w-3.5" />
+                            {locationLabel}
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <Clock3 className="h-3.5 w-3.5" />
+                            {availabilityLabel}
+                          </span>
+                        </p>
+                      </div>
 
-                {isStudio ? (
-                  <>
-                    <p>Город: {profile?.city ?? "Не указан"}</p>
-                    <p>Метро: {profile?.metro ?? "Не указано"}</p>
-                    <p>Услуги: {services.length ? services.join(", ") : "По запросу"}</p>
-                    <p>
-                      {profile?.isAvailableNow ? "Доступна сейчас" : "Сейчас занята"} •{" "}
-                      {profile?.budgetFrom ? `от ${profile.budgetFrom} ₽/ч` : "цена по запросу"}
-                    </p>
-                    <Button variant="secondary" onClick={() => openStudioBookingModal(item)}>
-                      Забронировать
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <p>Город: {profile?.city ?? "Не указан"}</p>
-                    <p>Услуги: {services.length ? services.join(", ") : "По запросу"}</p>
-                    <p>Credits: {credits.length ? credits.join(", ") : "Не указаны"}</p>
-                    <p>
-                      {profile?.isAvailableNow ? "Доступен сейчас" : "Сейчас занят"} •{" "}
-                      {profile?.budgetFrom ? `от ${profile.budgetFrom}` : "бюджет по запросу"}
-                    </p>
-                    <Button variant="secondary" onClick={() => openSendSongModal(item)}>
-                      Отправить песню
-                    </Button>
-                  </>
-                )}
+                      <div
+                        className={`inline-flex items-center rounded-xl border px-2.5 py-1 text-xs font-medium shadow-sm ${
+                          profile?.isAvailableNow
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-brand-border bg-white text-brand-muted"
+                        }`}
+                      >
+                        {profile?.isAvailableNow ? "Available now" : "Busy"}
+                      </div>
+                    </div>
+
+                    <div className="h-px bg-brand-border/60" />
+
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-brand-muted">
+                        SAFE ID: <span className="ml-1 font-medium text-brand-ink">{item.safeId}</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-brand-muted">
+                        <Wallet className="h-3 w-3" />
+                        <span className="font-medium text-brand-ink">{budgetLabel}</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4 p-4">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-xl border border-brand-border bg-white/80 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-brand-muted">Формат</p>
+                      <p className="mt-1 text-sm font-medium text-brand-ink">
+                        {profile?.isOnline ? "Онлайн" : "Оффлайн / локально"}
+                      </p>
+                      <p className="mt-1 text-xs text-brand-muted">
+                        {profile?.city ? `Город: ${profile.city}` : "Город не указан"}
+                        {isStudio ? ` • Метро: ${profile?.metro ?? "не указано"}` : ""}
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl border border-brand-border bg-white/80 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-brand-muted">Контакты</p>
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        {profile?.contactTelegram ? (
+                          <a
+                            className="inline-flex items-center rounded-lg border border-brand-border bg-white px-2.5 py-1 text-xs text-brand-ink hover:bg-[#f4f8ee]"
+                            href={profile.contactTelegram}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Telegram
+                          </a>
+                        ) : null}
+                        {profile?.contactUrl ? (
+                          <a
+                            className="inline-flex items-center rounded-lg border border-brand-border bg-white px-2.5 py-1 text-xs text-brand-ink hover:bg-[#f4f8ee]"
+                            href={profile.contactUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <Globe className="mr-1 h-3 w-3" />
+                            Сайт
+                          </a>
+                        ) : null}
+                        {!profile?.contactTelegram && !profile?.contactUrl && (
+                          <p className="text-xs text-brand-muted">Контакты не указаны</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-brand-muted">Услуги</p>
+                    <div className="flex flex-wrap gap-2">
+                      {services.length ? (
+                        services.map((service) => (
+                          <Badge key={`${item.id}-service-${service}`} className="bg-white">
+                            {service}
+                          </Badge>
+                        ))
+                      ) : (
+                        <span className="text-sm text-brand-muted">По запросу</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {!isStudio && (
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-brand-muted">Credits</p>
+                      <div className="flex flex-wrap gap-2">
+                        {credits.length ? (
+                          credits.slice(0, 6).map((credit) => (
+                            <span
+                              key={`${item.id}-credit-${credit}`}
+                              className="inline-flex items-center rounded-lg border border-brand-border bg-[#f7fbf2] px-2.5 py-1 text-xs text-brand-ink"
+                            >
+                              {credit}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-sm text-brand-muted">Не указаны</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {profile?.bio && (
+                    <div className="rounded-xl border border-brand-border bg-[#f7fbf2] px-3 py-2">
+                      <p className="text-sm text-brand-ink">{profile.bio}</p>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {isStudio ? (
+                      <Button onClick={() => openStudioBookingModal(item)} className="rounded-xl">
+                        Забронировать
+                      </Button>
+                    ) : isPromoCrew ? (
+                      <Button
+                        type="button"
+                        className="rounded-xl"
+                        disabled={!telegramLink}
+                        onClick={() => {
+                          if (!telegramLink) return;
+                          window.open(telegramLink, "_blank", "noopener,noreferrer");
+                        }}
+                      >
+                        <Send className="h-4 w-4" />
+                        {telegramLink ? "Связаться" : "Telegram не указан"}
+                      </Button>
+                    ) : (
+                      <Button onClick={() => openSendSongModal(item)} className="rounded-xl">
+                        <Send className="h-4 w-4" />
+                        Отправить песню
+                      </Button>
+                    )}
+                  </div>
+                </div>
               </div>
             </Card>
           );

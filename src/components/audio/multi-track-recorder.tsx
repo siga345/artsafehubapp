@@ -1,16 +1,40 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { Trash2, Volume2, VolumeX } from "lucide-react";
 
 import { AudioWaveformPlayer } from "@/components/audio/audio-waveform-player";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  computeDelayTimeMsFromBpm,
+  createDefaultFxChainSettings,
+  hasEnabledFx,
+  processAudioBufferWithFx,
+  type DelaySyncMode,
+  type DelayNoteDivision,
+  type FxChainSettings,
+  type FxFilterMode
+} from "@/lib/audio/fx-chain";
+import {
+  clampLoopPercentRange,
+  hasActiveRecorderAdjust,
+  renderAdjustedBufferMvp,
+  type RecorderAdjustSettings
+} from "@/lib/audio/recorder-adjust";
+import { analyzeAudioBlobInBrowser } from "@/lib/audio/analysis";
 
 type RecordingState = "idle" | "recording" | "paused" | "stopped";
-type RecorderPanel = "adjust" | "stems" | "mix";
+type RecorderPanel = "adjust" | "fx" | "stems" | "mix";
+type AdjustMode = "varispeed" | "gain";
+type FxPreviewStatus = "idle" | "processing" | "ready" | "error";
+type FxBlockUiKey = "eq" | "autotune" | "distortion" | "filter" | "delay" | "reverb";
+type TopPopover = "key" | "bpm" | null;
+type TonalMode = "minor" | "major";
 
 type Layer = {
   id: string;
+  kind: "import" | "recording";
   name: string;
   blob: Blob;
   url: string;
@@ -18,6 +42,8 @@ type Layer = {
   muted: boolean;
   volume: number;
 };
+
+type PendingRecordedTake = Omit<Layer, "kind" | "muted" | "volume">;
 
 type ReadyPayload = {
   blob: Blob;
@@ -37,11 +63,33 @@ export type MultiTrackRecorderHandle = {
 };
 
 const WAVEFORM_SAMPLES = 140;
+const FX_PREVIEW_DEBOUNCE_MS = 320;
+const DELAY_DIVISION_OPTIONS: Array<{ value: DelayNoteDivision; label: string }> = [
+  { value: "1/4", label: "1/4" },
+  { value: "1/8", label: "1/8" },
+  { value: "1/8D", label: "1/8D" },
+  { value: "1/8T", label: "1/8T" },
+  { value: "1/16", label: "1/16" }
+];
+const ENHARMONIC_KEY_COLUMNS = [
+  { sharp: "C#", flat: "Db" },
+  { sharp: "D#", flat: "Eb" },
+  { sharp: "F#", flat: "Gb" },
+  { sharp: "G#", flat: "Ab" },
+  { sharp: "A#", flat: "Bb" }
+] as const;
+const NATURAL_KEYS = ["C", "D", "E", "F", "G", "A", "B"] as const;
 
 function formatDuration(seconds: number) {
   const mm = Math.floor(seconds / 60);
   const ss = Math.floor(seconds % 60);
   return `${mm}:${String(ss).padStart(2, "0")}`;
+}
+
+function formatKeyChipLabel(root: string | null, mode: TonalMode, auto: boolean) {
+  if (auto) return root ? `${root} ${mode === "minor" ? "Min" : "Maj"}` : "Auto";
+  if (!root) return "Set Key";
+  return `${root} ${mode === "minor" ? "Min" : "Maj"}`;
 }
 
 async function getBlobDurationSeconds(file: Blob): Promise<number> {
@@ -123,6 +171,323 @@ function createLayerName(index: number) {
   return `Дорожка ${index}`;
 }
 
+function clampBpmValue(value: number) {
+  return Math.min(240, Math.max(40, Math.round(value)));
+}
+
+type AdjustRailSliderProps = {
+  label: string;
+  min: number;
+  max: number;
+  step?: number;
+  value: number;
+  valueLabel: string;
+  onChange: (next: number) => void;
+  centerValue?: number;
+};
+
+function AdjustRailSlider({
+  label,
+  min,
+  max,
+  step = 1,
+  value,
+  valueLabel,
+  onChange,
+  centerValue
+}: AdjustRailSliderProps) {
+  const safeRange = Math.max(1, max - min);
+  const thumbPercent = ((value - min) / safeRange) * 100;
+  const centerPercent = typeof centerValue === "number" ? ((centerValue - min) / safeRange) * 100 : null;
+
+  return (
+    <div className="rounded-2xl border border-white/5 bg-[#141519] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+      <div className="grid grid-cols-[72px_1fr_auto] items-center gap-2">
+        <div className="pl-2 font-mono text-sm text-white/80">{label}</div>
+
+        <div className="relative h-14 overflow-hidden rounded-xl border border-white/5 bg-[#101114]">
+          <div className="pointer-events-none absolute inset-x-3 top-1/2 h-px -translate-y-1/2 bg-white/10" />
+
+          <div className="pointer-events-none absolute inset-x-3 top-1/2 -translate-y-1/2">
+            <div className="flex items-center justify-between">
+              {Array.from({ length: 13 }).map((_, index) => (
+                <span
+                  key={index}
+                  className={`w-px rounded-full ${index === 6 ? "h-8 bg-white/35" : "h-5 bg-white/18"}`}
+                />
+              ))}
+            </div>
+          </div>
+
+          {centerPercent !== null && (
+            <div
+              className="pointer-events-none absolute top-1/2 h-9 w-[3px] -translate-y-1/2 rounded-full bg-white/90"
+              style={{ left: `calc(${centerPercent}% - 1.5px)` }}
+            />
+          )}
+
+          <div
+            className="pointer-events-none absolute top-1/2 h-10 w-[6px] -translate-y-1/2 rounded-full bg-[#ffe900] shadow-[0_0_0_2px_rgba(0,0,0,0.35)]"
+            style={{ left: `calc(${thumbPercent}% - 3px)` }}
+          />
+
+          <input
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={value}
+            onChange={(event) => onChange(Number(event.target.value))}
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          />
+        </div>
+
+        <div className="min-w-[64px] pr-2 text-right font-mono text-sm font-semibold text-white/75">{valueLabel}</div>
+      </div>
+    </div>
+  );
+}
+
+type FxSectionCardProps = {
+  title: string;
+  subtitle?: string;
+  enabled: boolean;
+  collapsed: boolean;
+  onToggleEnabled: (next: boolean) => void;
+  onToggleCollapsed: () => void;
+  onReset: () => void;
+  children: React.ReactNode;
+};
+
+function FxSectionCard({
+  title,
+  subtitle,
+  enabled,
+  collapsed,
+  onToggleEnabled,
+  onToggleCollapsed,
+  onReset,
+  children
+}: FxSectionCardProps) {
+  return (
+    <div className="rounded-2xl border border-white/5 bg-[#1a1b20] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-white"
+        >
+          {collapsed ? "+" : "-"} {title}
+        </button>
+        <button
+          type="button"
+          onClick={() => onToggleEnabled(!enabled)}
+          className={`rounded-lg px-2 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${
+            enabled ? "bg-[#ffe900] text-black" : "border border-white/10 bg-white/5 text-white/55"
+          }`}
+        >
+          {enabled ? "On" : "Off"}
+        </button>
+        <button
+          type="button"
+          onClick={onReset}
+          className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs font-semibold text-white/60 hover:text-white"
+        >
+          Reset
+        </button>
+        {subtitle && <p className="ml-auto text-xs text-white/45">{subtitle}</p>}
+      </div>
+      {!collapsed && <div className="mt-3 space-y-2">{children}</div>}
+    </div>
+  );
+}
+
+type FxSliderRowProps = {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (next: number) => void;
+  valueLabel?: string;
+};
+
+function FxSliderRow({ label, value, min, max, step = 1, onChange, valueLabel }: FxSliderRowProps) {
+  return (
+    <div className="grid grid-cols-[110px_1fr_auto] items-center gap-2 rounded-xl border border-white/5 bg-[#141519] px-3 py-2">
+      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-white/60">{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="h-2 w-full cursor-pointer accent-[#ffe900]"
+      />
+      <span className="min-w-[56px] text-right font-mono text-xs text-white/80">
+        {valueLabel ?? (Number.isInteger(value) ? String(value) : value.toFixed(2))}
+      </span>
+    </div>
+  );
+}
+
+type FxSelectRowProps<T extends string> = {
+  label: string;
+  value: T;
+  onChange: (next: T) => void;
+  options: Array<{ value: T; label: string }>;
+};
+
+function FxSelectRow<T extends string>({ label, value, onChange, options }: FxSelectRowProps<T>) {
+  return (
+    <div className="grid grid-cols-[110px_1fr] items-center gap-2 rounded-xl border border-white/5 bg-[#141519] px-3 py-2">
+      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-white/60">{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value as T)}
+        className="h-9 rounded-lg border border-white/10 bg-[#202127] px-2 text-sm text-white"
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+type FxEqGraphPanelProps = {
+  bands: FxChainSettings["eq"]["bands"];
+  onBandToggle: (index: number) => void;
+  onBandGainChange: (index: number, nextGainDb: number) => void;
+};
+
+function FxEqGraphPanel({ bands, onBandToggle, onBandGainChange }: FxEqGraphPanelProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const minDb = -18;
+  const maxDb = 18;
+  const graphWidth = 100;
+  const graphHeight = 100;
+  const plotTop = 14;
+  const plotBottom = 86;
+  const plotHeight = plotBottom - plotTop;
+  const zeroDbY = plotTop + plotHeight / 2;
+
+  const toXPercent = (frequency: number) => {
+    const minHz = 20;
+    const maxHz = 20000;
+    const safeHz = Math.min(maxHz, Math.max(minHz, frequency));
+    const ratio = (Math.log10(safeHz) - Math.log10(minHz)) / (Math.log10(maxHz) - Math.log10(minHz));
+    return 8 + ratio * 84;
+  };
+
+  const toYPercent = (gainDb: number) => {
+    const clamped = Math.min(maxDb, Math.max(minDb, gainDb));
+    const ratio = (clamped - minDb) / (maxDb - minDb);
+    return plotBottom - ratio * plotHeight;
+  };
+
+  const pointerToGain = (clientY: number) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return 0;
+    const topPad = (plotTop / 100) * rect.height;
+    const bottomPad = ((100 - plotBottom) / 100) * rect.height;
+    const usable = Math.max(1, rect.height - topPad - bottomPad);
+    const y = Math.min(rect.height - bottomPad, Math.max(topPad, clientY - rect.top));
+    const ratio = 1 - (y - topPad) / usable;
+    const gain = minDb + ratio * (maxDb - minDb);
+    return Math.round(gain * 2) / 2;
+  };
+
+  const points = bands.map((band) => ({
+    ...band,
+    x: toXPercent(band.frequency),
+    y: toYPercent(band.gainDb)
+  }));
+
+  const curvePath = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+    .join(" ");
+
+  return (
+    <div className="rounded-[22px] border border-white/5 bg-[#1a1b1f] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+      <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-[0.14em] text-white/55">
+        <span>Equalizer Curve</span>
+        <span>{minDb}..+{maxDb} dB</span>
+      </div>
+
+      <div ref={containerRef} className="relative h-52 overflow-hidden rounded-[18px] border border-white/5 bg-[#121316]">
+        <svg viewBox={`0 0 ${graphWidth} ${graphHeight}`} className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#ffffff" stopOpacity="0.08" />
+              <stop offset="100%" stopColor="#ffffff" stopOpacity="0.01" />
+            </linearGradient>
+          </defs>
+
+          {[plotTop, plotTop + plotHeight * 0.25, zeroDbY, plotTop + plotHeight * 0.75, plotBottom].map((y) => (
+            <line key={`grid-y-${y}`} x1="0" y1={y} x2={graphWidth} y2={y} stroke="rgba(255,255,255,0.08)" strokeDasharray="1.3 1.8" />
+          ))}
+          {[10, 25, 40, 55, 70, 85].map((x) => (
+            <line key={`grid-x-${x}`} x1={x} y1="0" x2={x} y2={graphHeight} stroke="rgba(255,255,255,0.05)" />
+          ))}
+
+          <line x1="0" y1={zeroDbY} x2={graphWidth} y2={zeroDbY} stroke="#ffffff" strokeOpacity="0.75" strokeWidth="0.8" />
+
+          <path d={`${curvePath} L 100 ${zeroDbY} L 0 ${zeroDbY} Z`} fill="url(#eqFill)" />
+          <path d={curvePath} fill="none" stroke="#2d3138" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+
+        {points.map((point, index) => (
+          <button
+            key={`${point.label}-${index}`}
+            type="button"
+            title={`${point.label}: ${point.gainDb > 0 ? "+" : ""}${point.gainDb.toFixed(1)} dB`}
+            onDoubleClick={() => onBandToggle(index)}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              onBandGainChange(index, pointerToGain(event.clientY));
+            }}
+            onPointerMove={(event) => {
+              if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+              onBandGainChange(index, pointerToGain(event.clientY));
+            }}
+            onPointerUp={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+            }}
+            onPointerCancel={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+            }}
+            className={`absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 shadow-sm transition ${
+              point.enabled
+                ? "border-white bg-white"
+                : "border-white/35 bg-[#1a1b1f]"
+            }`}
+            style={{ left: `${point.x}%`, top: `${point.y}%` }}
+          >
+            <span className="sr-only">{point.label}</span>
+          </button>
+        ))}
+
+        <div className="pointer-events-none absolute inset-x-3 bottom-2 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.12em] text-white/40">
+          <span>Low</span>
+          <span>Mid</span>
+          <span>High</span>
+        </div>
+      </div>
+
+      <p className="mt-2 text-xs text-white/45">Тяни точки вверх/вниз для `Gain`. Двойной клик по точке — on/off полосы.</p>
+    </div>
+  );
+}
+
 export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrackRecorderProps>(function MultiTrackRecorder(
   { onReady, onError, onReset, resetKey = 0 },
   ref
@@ -131,11 +496,43 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [layers, setLayers] = useState<Layer[]>([]);
   const [bpm, setBpm] = useState(90);
+  const [bpmInputValue, setBpmInputValue] = useState("90");
+  const [topPopover, setTopPopover] = useState<TopPopover>(null);
+  const [songKeyRoot, setSongKeyRoot] = useState<string | null>("Eb");
+  const [songKeyMode, setSongKeyMode] = useState<TonalMode>("minor");
+  const [songKeyAutoEnabled, setSongKeyAutoEnabled] = useState(false);
+  const [bpmAutoEnabled, setBpmAutoEnabled] = useState(false);
+  const [autoAnalysisLoading, setAutoAnalysisLoading] = useState<TopPopover>(null);
+  const [autoAnalysisError, setAutoAnalysisError] = useState("");
   const [metronomeEnabled, setMetronomeEnabled] = useState(true);
   const [mixPreviewUrl, setMixPreviewUrl] = useState("");
   const [mixing, setMixing] = useState(false);
   const [signalLevel, setSignalLevel] = useState(0);
   const [activePanel, setActivePanel] = useState<RecorderPanel>("adjust");
+  const [adjustMode, setAdjustMode] = useState<AdjustMode>("varispeed");
+  const [varispeedPercent, setVarispeedPercent] = useState(100);
+  const [pitchSemitones, setPitchSemitones] = useState(0);
+  const [inputGainPercent, setInputGainPercent] = useState(100);
+  const [outputGainPercent, setOutputGainPercent] = useState(100);
+  const [loopStartPercent, setLoopStartPercent] = useState(0);
+  const [loopEndPercent, setLoopEndPercent] = useState(100);
+  const [fxSettingsByLayerId, setFxSettingsByLayerId] = useState<Record<string, FxChainSettings>>({});
+  const [fxPreviewUrl, setFxPreviewUrl] = useState("");
+  const [fxPreviewStatus, setFxPreviewStatus] = useState<FxPreviewStatus>("idle");
+  const [fxPreviewError, setFxPreviewError] = useState("");
+  const [fxAutoPreviewEnabled, setFxAutoPreviewEnabled] = useState(true);
+  const [stemsPreviewUrl, setStemsPreviewUrl] = useState("");
+  const [stemsPreviewStatus, setStemsPreviewStatus] = useState<FxPreviewStatus>("idle");
+  const [stemsPreviewError, setStemsPreviewError] = useState("");
+  const [pendingRecordedTake, setPendingRecordedTake] = useState<PendingRecordedTake | null>(null);
+  const [fxBlockCollapsed, setFxBlockCollapsed] = useState<Record<FxBlockUiKey, boolean>>({
+    eq: false,
+    autotune: true,
+    distortion: true,
+    filter: true,
+    delay: false,
+    reverb: true
+  });
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -151,12 +548,36 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
   const waveformHistoryRef = useRef<number[]>(Array.from({ length: WAVEFORM_SAMPLES }, () => 0.02));
   const waveformPushTsRef = useRef(0);
   const waveformLevelTsRef = useRef(0);
+  const fxPreviewDebounceRef = useRef<number | null>(null);
+  const fxPreviewRenderSeqRef = useRef(0);
+  const stemsPreviewRenderSeqRef = useRef(0);
+  const decodedLayerCacheRef = useRef<Map<string, AudioBuffer>>(new Map());
 
-  const canStart = recordingState === "idle" || recordingState === "stopped";
+  const canStart = (recordingState === "idle" || recordingState === "stopped") && !pendingRecordedTake;
   const canPause = recordingState === "recording";
   const canResume = recordingState === "paused";
   const canStop = recordingState === "recording" || recordingState === "paused";
   const activeLayerCount = useMemo(() => layers.filter((layer) => !layer.muted).length, [layers]);
+  const lastRecordedLayer = useMemo(
+    () => [...layers].reverse().find((layer) => layer.kind === "recording") ?? null,
+    [layers]
+  );
+  const lastRecordedLayerFxSettings = useMemo(
+    () => (lastRecordedLayer ? fxSettingsByLayerId[lastRecordedLayer.id] ?? createDefaultFxChainSettings() : null),
+    [fxSettingsByLayerId, lastRecordedLayer]
+  );
+  const lastTakeAdjustSettings = useMemo<RecorderAdjustSettings>(
+    () => ({
+      varispeedPercent,
+      pitchSemitones,
+      inputGainPercent,
+      outputGainPercent
+    }),
+    [inputGainPercent, outputGainPercent, pitchSemitones, varispeedPercent]
+  );
+  const lastTakeHasActiveAdjust = useMemo(() => hasActiveRecorderAdjust(lastTakeAdjustSettings), [lastTakeAdjustSettings]);
+  const lastRecordedLayerHasEnabledFx = Boolean(lastRecordedLayerFxSettings && hasEnabledFx(lastRecordedLayerFxSettings));
+  const lastTakeNeedsProcessedPreview = Boolean(lastRecordedLayer && (lastTakeHasActiveAdjust || lastRecordedLayerHasEnabledFx));
   const latestLayerDuration = layers[layers.length - 1]?.durationSec ?? 0;
   const primaryActionLabel = canPause ? "Pause" : canResume ? "Resume" : layers.length ? "Record Next" : "Record";
   const statusHint =
@@ -166,6 +587,313 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
         ? "Paused"
         : `${Math.round(signalLevel * 100)}% input level`;
   const displayedTotalDuration = Math.max(recordingSeconds, latestLayerDuration);
+  const playheadPercent = displayedTotalDuration > 0 ? Math.min(100, (recordingSeconds / displayedTotalDuration) * 100) : 0;
+  const lastTakePreviewSrc =
+    lastRecordedLayer && lastTakeNeedsProcessedPreview && fxPreviewStatus === "ready" && fxPreviewUrl ? fxPreviewUrl : lastRecordedLayer?.url ?? "";
+  const lastTakePreviewBadge =
+    lastRecordedLayer && lastTakeNeedsProcessedPreview && fxPreviewStatus === "ready" ? "Processed preview" : "Dry preview";
+  const loopPreviewRange = useMemo(() => clampLoopPercentRange(loopStartPercent, loopEndPercent), [loopEndPercent, loopStartPercent]);
+  const sessionRenderBusy = mixing || stemsPreviewStatus === "processing" || Boolean(pendingRecordedTake);
+  const showPendingTakeReview = Boolean(pendingRecordedTake);
+  const hasBackingForOverdub = activeLayerCount > 0;
+  const showMultitrackLaneOverlay =
+    hasBackingForOverdub && (recordingState === "recording" || recordingState === "paused" || showPendingTakeReview);
+  const recorderTitle = "cream recording";
+  const recorderSubtitle = "untitled project • Maryen";
+  const keyChipLabel = formatKeyChipLabel(songKeyRoot, songKeyMode, songKeyAutoEnabled);
+
+  useEffect(() => {
+    setBpmInputValue(String(bpm));
+  }, [bpm]);
+
+  function clearFxPreviewDebounce() {
+    if (fxPreviewDebounceRef.current) {
+      window.clearTimeout(fxPreviewDebounceRef.current);
+      fxPreviewDebounceRef.current = null;
+    }
+  }
+
+  function clearFxPreviewUrl() {
+    setFxPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return "";
+    });
+  }
+
+  function clearStemsPreviewUrl() {
+    setStemsPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return "";
+    });
+  }
+
+  function resetFxPreviewState() {
+    clearFxPreviewDebounce();
+    fxPreviewRenderSeqRef.current += 1;
+    clearFxPreviewUrl();
+    setFxPreviewStatus("idle");
+    setFxPreviewError("");
+  }
+
+  function resetStemsPreviewState() {
+    stemsPreviewRenderSeqRef.current += 1;
+    clearStemsPreviewUrl();
+    setStemsPreviewStatus("idle");
+    setStemsPreviewError("");
+  }
+
+  function clearPendingRecordedTake() {
+    setPendingRecordedTake((prev) => {
+      if (prev) {
+        URL.revokeObjectURL(prev.url);
+      }
+      return null;
+    });
+  }
+
+  function commitPendingRecordedTake() {
+    if (!pendingRecordedTake) return;
+    const takeToCommit = pendingRecordedTake;
+    setPendingRecordedTake(null);
+    setLayers((prev) => [
+      ...prev,
+      {
+        ...takeToCommit,
+        kind: "recording" as const,
+        muted: false,
+        volume: 0.9
+      }
+    ]);
+    setFxSettingsByLayerId((prev) => ({
+      ...prev,
+      [takeToCommit.id]: createDefaultFxChainSettings()
+    }));
+    setRecordingState("stopped");
+    setActivePanel("adjust");
+  }
+
+  function discardPendingRecordedTake() {
+    if (!pendingRecordedTake) return;
+    clearPendingRecordedTake();
+    setRecordingState(layers.length ? "stopped" : "idle");
+    setRecordingSeconds(0);
+    resetWaveform();
+  }
+
+  async function decodeLayerBuffer(layer: Layer): Promise<AudioBuffer> {
+    const cached = decodedLayerCacheRef.current.get(layer.id);
+    if (cached) return cached;
+    const ctx = new window.AudioContext();
+    try {
+      const arrayBuffer = await layer.blob.arrayBuffer();
+      const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+      decodedLayerCacheRef.current.set(layer.id, decoded);
+      return decoded;
+    } finally {
+      await ctx.close().catch(() => null);
+    }
+  }
+
+  function updateFxForLastRecorded(updater: (prev: FxChainSettings) => FxChainSettings) {
+    if (!lastRecordedLayer) return;
+    setFxSettingsByLayerId((prev) => {
+      const current = prev[lastRecordedLayer.id] ?? createDefaultFxChainSettings();
+      return {
+        ...prev,
+        [lastRecordedLayer.id]: updater(current)
+      };
+    });
+  }
+
+  function setFxBlockEnabled(block: keyof FxChainSettings, enabled: boolean) {
+    updateFxForLastRecorded((prev) => ({
+      ...prev,
+      [block]: { ...prev[block], enabled }
+    }));
+  }
+
+  function enableAllFx() {
+    updateFxForLastRecorded((prev) => ({
+      ...prev,
+      eq: { ...prev.eq, enabled: true },
+      autotune: { ...prev.autotune, enabled: true },
+      distortion: { ...prev.distortion, enabled: true },
+      filter: { ...prev.filter, enabled: true },
+      delay: { ...prev.delay, enabled: true },
+      reverb: { ...prev.reverb, enabled: true }
+    }));
+  }
+
+  function toggleFxBlockCollapsed(block: FxBlockUiKey) {
+    setFxBlockCollapsed((prev) => ({ ...prev, [block]: !prev[block] }));
+  }
+
+  function resetFxBlock(block: keyof FxChainSettings) {
+    const defaults = createDefaultFxChainSettings();
+    updateFxForLastRecorded((prev) => ({
+      ...prev,
+      [block]: defaults[block]
+    }));
+  }
+
+  function bypassAllFx() {
+    updateFxForLastRecorded((prev) => ({
+      ...prev,
+      eq: { ...prev.eq, enabled: false },
+      autotune: { ...prev.autotune, enabled: false },
+      distortion: { ...prev.distortion, enabled: false },
+      filter: { ...prev.filter, enabled: false },
+      delay: { ...prev.delay, enabled: false },
+      reverb: { ...prev.reverb, enabled: false }
+    }));
+  }
+
+  async function processLayerForSessionRender(
+    layer: Layer,
+    audioBuffer: AudioBuffer,
+    options: {
+      lastTakeId: string | null;
+      adjustSettings: RecorderAdjustSettings;
+      applyAdjustToLastTake: boolean;
+      fxSettingsForLastTake: FxChainSettings | null;
+      applyFxToLastTake: boolean;
+      bpmForFx: number;
+    }
+  ): Promise<AudioBuffer> {
+    if (!options.lastTakeId || layer.id !== options.lastTakeId) {
+      return audioBuffer;
+    }
+
+    let nextBuffer = audioBuffer;
+    if (options.applyAdjustToLastTake) {
+      nextBuffer = await renderAdjustedBufferMvp({
+        inputBuffer: nextBuffer,
+        settings: options.adjustSettings
+      });
+    }
+
+    if (options.applyFxToLastTake && options.fxSettingsForLastTake) {
+      nextBuffer = await processAudioBufferWithFx({
+        inputBuffer: nextBuffer,
+        settings: options.fxSettingsForLastTake,
+        bpm: options.bpmForFx
+      });
+    }
+
+    return nextBuffer;
+  }
+
+  async function renderSessionAudioBlob(): Promise<{ blob: Blob; durationSec: number }> {
+    if (!layers.length) {
+      throw new Error("Сначала запиши хотя бы одну дорожку.");
+    }
+
+    const activeLayers = layers.filter((layer) => !layer.muted);
+    if (!activeLayers.length) {
+      throw new Error("Все дорожки выключены. Включи хотя бы одну для сведения.");
+    }
+
+    const lastTakeId = lastRecordedLayer?.id ?? null;
+    const fxSettingsForLastTake = lastTakeId ? fxSettingsByLayerId[lastTakeId] ?? createDefaultFxChainSettings() : null;
+    const applyFxToLastTake = Boolean(lastTakeId && fxSettingsForLastTake && hasEnabledFx(fxSettingsForLastTake));
+    const applyAdjustToLastTake = Boolean(lastTakeId && hasActiveRecorderAdjust(lastTakeAdjustSettings));
+
+    const processed = await Promise.all(
+      activeLayers.map(async (layer) => {
+        const decoded = await decodeLayerBuffer(layer);
+        const audioBuffer = await processLayerForSessionRender(layer, decoded, {
+          lastTakeId,
+          adjustSettings: lastTakeAdjustSettings,
+          applyAdjustToLastTake,
+          fxSettingsForLastTake,
+          applyFxToLastTake,
+          bpmForFx: bpm
+        });
+        return { layer, audioBuffer };
+      })
+    );
+
+    const sampleRate = processed[0]?.audioBuffer.sampleRate ?? 44100;
+    const totalLength = processed.reduce((max, item) => Math.max(max, item.audioBuffer.length), 0);
+    const offline = new OfflineAudioContext(1, Math.max(1, totalLength), sampleRate);
+
+    processed.forEach(({ layer, audioBuffer }) => {
+      const source = offline.createBufferSource();
+      source.buffer = audioBuffer;
+      const gain = offline.createGain();
+      gain.gain.value = layer.volume;
+      source.connect(gain).connect(offline.destination);
+      source.start(0);
+    });
+
+    const rendered = await offline.startRendering();
+    return {
+      blob: encodeWavFromBuffer(rendered),
+      durationSec: Math.round(rendered.duration)
+    };
+  }
+
+  async function renderFxPreviewNow() {
+    const targetLayer = lastRecordedLayer;
+    const settings = lastRecordedLayerFxSettings;
+    const hasAdjust = hasActiveRecorderAdjust(lastTakeAdjustSettings);
+    const hasFx = Boolean(settings && hasEnabledFx(settings));
+    if (!targetLayer) {
+      resetFxPreviewState();
+      return;
+    }
+    if (!settings) {
+      resetFxPreviewState();
+      return;
+    }
+    if (!hasAdjust && !hasFx) {
+      clearFxPreviewDebounce();
+      clearFxPreviewUrl();
+      setFxPreviewStatus("idle");
+      setFxPreviewError("");
+      return;
+    }
+
+    const renderSeq = ++fxPreviewRenderSeqRef.current;
+    setFxPreviewStatus("processing");
+    setFxPreviewError("");
+
+    try {
+      const decoded = await decodeLayerBuffer(targetLayer);
+      const processedBuffer = await processLayerForSessionRender(targetLayer, decoded, {
+        lastTakeId: targetLayer.id,
+        adjustSettings: lastTakeAdjustSettings,
+        applyAdjustToLastTake: hasAdjust,
+        fxSettingsForLastTake: settings,
+        applyFxToLastTake: hasFx,
+        bpmForFx: bpm
+      });
+      const nextUrl = URL.createObjectURL(encodeWavFromBuffer(processedBuffer));
+      if (renderSeq !== fxPreviewRenderSeqRef.current) {
+        URL.revokeObjectURL(nextUrl);
+        return;
+      }
+      setFxPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return nextUrl;
+      });
+      setFxPreviewStatus("ready");
+      setFxPreviewError("");
+    } catch (error) {
+      if (renderSeq !== fxPreviewRenderSeqRef.current) return;
+      clearFxPreviewUrl();
+      setFxPreviewStatus("error");
+      setFxPreviewError(error instanceof Error ? error.message : "Preview render failed.");
+    }
+  }
+
+  function queueFxPreviewRender() {
+    clearFxPreviewDebounce();
+    fxPreviewDebounceRef.current = window.setTimeout(() => {
+      fxPreviewDebounceRef.current = null;
+      void renderFxPreviewNow();
+    }, FX_PREVIEW_DEBOUNCE_MS);
+  }
 
   useImperativeHandle(
     ref,
@@ -184,6 +912,7 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
             ...prev,
             {
               id: crypto.randomUUID(),
+              kind: "import" as const,
               name: options?.name?.trim() || file.name || createLayerName(prev.length + 1),
               blob: file,
               url,
@@ -203,6 +932,8 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
 
   useEffect(
     () => () => {
+      clearFxPreviewDebounce();
+      fxPreviewRenderSeqRef.current += 1;
       stopTimer();
       stopStream();
       stopBackingTracks();
@@ -219,9 +950,19 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
       if (mixPreviewUrl) {
         URL.revokeObjectURL(mixPreviewUrl);
       }
+      if (fxPreviewUrl) {
+        URL.revokeObjectURL(fxPreviewUrl);
+      }
+      if (stemsPreviewUrl) {
+        URL.revokeObjectURL(stemsPreviewUrl);
+      }
+      if (pendingRecordedTake) {
+        URL.revokeObjectURL(pendingRecordedTake.url);
+      }
+      decodedLayerCacheRef.current.clear();
       layers.forEach((layer) => URL.revokeObjectURL(layer.url));
     },
-    [layers, mixPreviewUrl]
+    [fxPreviewUrl, layers, mixPreviewUrl, pendingRecordedTake, stemsPreviewUrl]
   );
 
   useEffect(() => {
@@ -245,18 +986,66 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
     drawWaveform(false);
     setRecordingState("idle");
     setRecordingSeconds(0);
+    setTopPopover(null);
     setActivePanel("adjust");
+    setAdjustMode("varispeed");
+    setVarispeedPercent(100);
+    setPitchSemitones(0);
+    setInputGainPercent(100);
+    setOutputGainPercent(100);
+    setLoopStartPercent(0);
+    setLoopEndPercent(100);
+    setFxSettingsByLayerId({});
+    setFxAutoPreviewEnabled(true);
+    setSongKeyAutoEnabled(false);
+    setBpmAutoEnabled(false);
+    clearPendingRecordedTake();
+    setFxPreviewStatus("idle");
+    setFxPreviewError("");
+    setStemsPreviewStatus("idle");
+    setStemsPreviewError("");
+    clearFxPreviewDebounce();
+    fxPreviewRenderSeqRef.current += 1;
+    stemsPreviewRenderSeqRef.current += 1;
+    decodedLayerCacheRef.current.clear();
     setMixPreviewUrl((prev) => {
       if (prev) {
         URL.revokeObjectURL(prev);
       }
       return "";
     });
+    setFxPreviewUrl((prev) => {
+      if (prev) {
+        URL.revokeObjectURL(prev);
+      }
+      return "";
+    });
+    setStemsPreviewUrl((prev) => {
+      if (prev) {
+        URL.revokeObjectURL(prev);
+      }
+      return "";
+    });
+    clearPendingRecordedTake();
     setLayers((prev) => {
       prev.forEach((layer) => URL.revokeObjectURL(layer.url));
       return [];
     });
   }, [resetKey]);
+
+  useEffect(() => {
+    if (!lastRecordedLayer || !lastRecordedLayerFxSettings) {
+      resetFxPreviewState();
+      return;
+    }
+    if (!fxAutoPreviewEnabled) {
+      clearFxPreviewDebounce();
+      return;
+    }
+    queueFxPreviewRender();
+    return () => clearFxPreviewDebounce();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bpm, fxAutoPreviewEnabled, lastRecordedLayer, lastRecordedLayerFxSettings, lastTakeAdjustSettings]);
 
   function stopTimer() {
     if (timerRef.current) {
@@ -309,11 +1098,11 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
     const barWidth = width / points.length;
 
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "#f7faef";
+    ctx.fillStyle = "#171717";
     ctx.fillRect(0, 0, width, height);
 
     const gridStep = Math.max(16, Math.floor(width / 14));
-    ctx.strokeStyle = "rgba(111,127,115,0.22)";
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
     ctx.lineWidth = 1;
     for (let x = 0; x <= width; x += gridStep) {
       ctx.beginPath();
@@ -322,6 +1111,14 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
       ctx.stroke();
     }
 
+    ctx.strokeStyle = "rgba(255,255,255,0.82)";
+    ctx.setLineDash([2, 4]);
+    ctx.beginPath();
+    ctx.moveTo(0, centerY);
+    ctx.lineTo(Math.min(width * 0.2, gridStep * 3), centerY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
     for (let i = 0; i < points.length; i += 1) {
       const amplitude = Math.max(0.02, Math.min(1, points[i]));
       const barHeight = Math.max(height * 0.05, amplitude * height * 0.9);
@@ -329,12 +1126,14 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
       const y = centerY - barHeight / 2;
 
       const ratio = i / points.length;
-      if (live && amplitude > 0.62 && ratio > 0.58) {
-        ctx.fillStyle = "#d75f5f";
+      if (live && amplitude > 0.62 && ratio > 0.74) {
+        ctx.fillStyle = "rgba(255, 79, 79, 0.85)";
+      } else if (ratio > 0.82) {
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
       } else {
-        ctx.fillStyle = "#294237";
+        ctx.fillStyle = "rgba(255,255,255,0.92)";
       }
-      ctx.fillRect(x, y, Math.max(1, barWidth * 0.7), barHeight);
+      ctx.fillRect(x, y, Math.max(1, barWidth * 0.56), barHeight);
     }
   }
 
@@ -481,9 +1280,25 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
 
   function resetRecorderSession() {
     stopAll();
+    resetFxPreviewState();
+    resetStemsPreviewState();
+    decodedLayerCacheRef.current.clear();
     setRecordingState("idle");
     setRecordingSeconds(0);
+    setTopPopover(null);
     setActivePanel("adjust");
+    setAdjustMode("varispeed");
+    setVarispeedPercent(100);
+    setPitchSemitones(0);
+    setInputGainPercent(100);
+    setOutputGainPercent(100);
+    setLoopStartPercent(0);
+    setLoopEndPercent(100);
+    setFxSettingsByLayerId({});
+    setFxAutoPreviewEnabled(true);
+    setSongKeyAutoEnabled(false);
+    setBpmAutoEnabled(false);
+    clearPendingRecordedTake();
     setLayers((prev) => {
       prev.forEach((layer) => URL.revokeObjectURL(layer.url));
       return [];
@@ -518,20 +1333,13 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
         const url = URL.createObjectURL(blob);
-        setLayers((prev) => {
-          const next = [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              name: createLayerName(prev.length + 1),
-              blob,
-              url,
-              durationSec: recordingSeconds,
-              muted: false,
-              volume: 0.9
-            }
-          ];
-          return next;
+        const nextLayerId = crypto.randomUUID();
+        setPendingRecordedTake({
+          id: nextLayerId,
+          name: createLayerName(layers.length + 1),
+          blob,
+          url,
+          durationSec: recordingSeconds
         });
         setRecordingState("stopped");
         stopAll();
@@ -593,6 +1401,17 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
   }
 
   function removeLayer(layerId: string) {
+    decodedLayerCacheRef.current.delete(layerId);
+    setFxSettingsByLayerId((prev) => {
+      if (!(layerId in prev)) return prev;
+      const next = { ...prev };
+      delete next[layerId];
+      return next;
+    });
+    if (lastRecordedLayer?.id === layerId) {
+      resetFxPreviewState();
+      resetStemsPreviewState();
+    }
     setLayers((prev) => {
       const target = prev.find((layer) => layer.id === layerId);
       if (target) {
@@ -605,45 +1424,10 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
   }
 
   async function renderMixdown() {
-    if (!layers.length) {
-      onError("Сначала запиши хотя бы одну дорожку.");
-      return;
-    }
-
     setMixing(true);
     onError("");
     try {
-      const activeLayers = layers.filter((layer) => !layer.muted);
-      if (!activeLayers.length) {
-        onError("Все дорожки выключены. Включи хотя бы одну для сведения.");
-        return;
-      }
-
-      const decodingContext = new window.AudioContext();
-      const decoded = await Promise.all(
-        activeLayers.map(async (layer) => {
-          const arrayBuffer = await layer.blob.arrayBuffer();
-          const audioBuffer = await decodingContext.decodeAudioData(arrayBuffer.slice(0));
-          return { layer, audioBuffer };
-        })
-      );
-
-      const sampleRate = decoded[0].audioBuffer.sampleRate;
-      const totalLength = decoded.reduce((max, item) => Math.max(max, item.audioBuffer.length), 0);
-      const offline = new OfflineAudioContext(1, totalLength, sampleRate);
-
-      decoded.forEach(({ layer, audioBuffer }) => {
-        const source = offline.createBufferSource();
-        source.buffer = audioBuffer;
-        const gain = offline.createGain();
-        gain.gain.value = layer.volume;
-        source.connect(gain).connect(offline.destination);
-        source.start(0);
-      });
-
-      const rendered = await offline.startRendering();
-      const mixBlob = encodeWavFromBuffer(rendered);
-      const mixDuration = Math.round(rendered.duration);
+      const { blob: mixBlob, durationSec: mixDuration } = await renderSessionAudioBlob();
       if (mixPreviewUrl) {
         URL.revokeObjectURL(mixPreviewUrl);
       }
@@ -655,7 +1439,6 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
         filename: `multitrack-mix-${Date.now()}.wav`
       });
 
-      await decodingContext.close();
     } catch (error) {
       onError(error instanceof Error ? error.message : "Не удалось свести дорожки.");
     } finally {
@@ -663,181 +1446,705 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
     }
   }
 
-  return (
-    <div className="space-y-3 rounded-[28px] border border-brand-border bg-[#f7faef] p-4 text-brand-ink shadow-[0_12px_34px_rgba(55,74,61,0.14)]">
-      <div className="flex items-center justify-between">
-        <Button
-          variant="secondary"
-          className="rounded-full border-brand-border bg-white px-4 py-1.5 text-brand-ink hover:bg-[#eff4e6]"
-          onClick={resetRecorderSession}
-        >
-          Cancel
-        </Button>
-        <Button
-          variant="secondary"
-          className="rounded-full border-brand-border bg-white px-4 py-1.5 text-brand-ink hover:bg-[#eff4e6] disabled:opacity-40"
-          disabled={!layers.length || mixing}
-          onClick={renderMixdown}
-        >
-          {mixing ? "Saving..." : "Save"}
-        </Button>
-      </div>
+  async function renderStemsPreview() {
+    if (stemsPreviewStatus === "processing" || mixing) return;
+    setStemsPreviewStatus("processing");
+    setStemsPreviewError("");
+    const renderSeq = ++stemsPreviewRenderSeqRef.current;
+    try {
+      const { blob } = await renderSessionAudioBlob();
+      const nextUrl = URL.createObjectURL(blob);
+      if (renderSeq !== stemsPreviewRenderSeqRef.current) {
+        URL.revokeObjectURL(nextUrl);
+        return;
+      }
+      setStemsPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return nextUrl;
+      });
+      setStemsPreviewStatus("ready");
+      setStemsPreviewError("");
+    } catch (error) {
+      if (renderSeq !== stemsPreviewRenderSeqRef.current) return;
+      clearStemsPreviewUrl();
+      setStemsPreviewStatus("error");
+      setStemsPreviewError(error instanceof Error ? error.message : "Не удалось собрать preview дорожек.");
+    }
+  }
 
-      <div className="rounded-[26px] border border-brand-border bg-[#f1f6e8] p-3">
+  function handleBpmInputChange(rawValue: string) {
+    setBpmInputValue(rawValue);
+    if (rawValue.trim() === "") return;
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) return;
+    if (parsed < 40 || parsed > 240) return;
+    setBpm(Math.round(parsed));
+  }
+
+  function commitBpmInput() {
+    if (bpmInputValue.trim() === "") {
+      setBpmInputValue(String(bpm));
+      return;
+    }
+    const parsed = Number(bpmInputValue);
+    if (!Number.isFinite(parsed)) {
+      setBpmInputValue(String(bpm));
+      return;
+    }
+    const next = clampBpmValue(parsed);
+    setBpm(next);
+    setBpmInputValue(String(next));
+  }
+
+  function toggleTopPopover(next: Exclude<TopPopover, null>) {
+    setTopPopover((prev) => (prev === next ? null : next));
+  }
+
+  function closeTopPopover() {
+    setTopPopover(null);
+  }
+
+  function selectSongKey(root: string) {
+    setSongKeyRoot(root);
+    setSongKeyAutoEnabled(false);
+  }
+
+  function clearSongKeySelection() {
+    setSongKeyRoot(null);
+    setSongKeyAutoEnabled(false);
+  }
+
+  function toggleSongKeyAuto() {
+    setSongKeyAutoEnabled((prev) => !prev);
+  }
+
+  function setSongKeyModeAndDisableAuto(nextMode: TonalMode) {
+    setSongKeyMode(nextMode);
+    setSongKeyAutoEnabled(false);
+  }
+
+  function applyBpmValue(nextValue: number) {
+    const next = clampBpmValue(nextValue);
+    setBpm(next);
+    setBpmInputValue(String(next));
+    setBpmAutoEnabled(false);
+  }
+
+  function applyBpmDelta(delta: number) {
+    applyBpmValue(bpm + delta);
+  }
+
+  function clearBpmSelection() {
+    applyBpmValue(90);
+  }
+
+  function toggleBpmAuto() {
+    setBpmAutoEnabled((prev) => !prev);
+  }
+
+  async function runAutoDetect(target: Exclude<TopPopover, null>) {
+    const sourceBlob =
+      pendingRecordedTake?.blob ?? [...layers].reverse().find((layer) => layer.kind === "import" || layer.kind === "recording")?.blob ?? null;
+
+    if (!sourceBlob) {
+      setAutoAnalysisError("Нет аудио для анализа. Загрузите файл или запишите дубль.");
+      return;
+    }
+
+    setAutoAnalysisLoading(target);
+    setAutoAnalysisError("");
+    try {
+      const result = await analyzeAudioBlobInBrowser(sourceBlob);
+      if (target === "key") {
+        if (result.keyRoot && result.keyMode) {
+          setSongKeyRoot(result.keyRoot);
+          setSongKeyMode(result.keyMode);
+          setSongKeyAutoEnabled(true);
+        } else {
+          setAutoAnalysisError("Не удалось уверенно определить тональность.");
+        }
+      }
+      if (target === "bpm") {
+        if (result.bpm !== null) {
+          applyBpmValue(result.bpm);
+          setBpmAutoEnabled(true);
+        } else {
+          setAutoAnalysisError("Не удалось определить BPM.");
+        }
+      }
+    } catch (error) {
+      setAutoAnalysisError(error instanceof Error ? error.message : "Ошибка анализа аудио.");
+    } finally {
+      setAutoAnalysisLoading(null);
+    }
+  }
+
+  return (
+    <div className="relative space-y-4 overflow-hidden rounded-[40px] border border-white/10 bg-[radial-gradient(circle_at_30%_-10%,rgba(255,255,255,0.1),transparent_45%),linear-gradient(180deg,#1f2024_0%,#17181b_65%,#141518_100%)] p-4 text-white shadow-[0_28px_70px_rgba(0,0,0,0.42)]">
+      <div className="relative rounded-[30px] border border-white/5 bg-transparent px-2 pb-1 pt-5">
         <div className="space-y-1 px-2 pt-1 text-center">
-          <p className="text-2xl font-semibold tracking-tight">{layers.length ? `take ${layers.length}` : "new recording"}</p>
-          <p className="text-sm text-brand-muted">
-            {layers.length
-              ? `${activeLayerCount} active tracks • ${metronomeEnabled ? `${bpm} BPM` : "metronome off"}`
-              : "Сразу запись, потом сведение и версия."}
-          </p>
-          <div className="flex flex-wrap justify-center gap-2 pt-1">
-            <span className="rounded-lg border border-brand-border bg-white px-2.5 py-1 text-xs font-semibold text-brand-ink">
-              {metronomeEnabled ? "Metronome On" : "Metronome Off"}
-            </span>
-            <span className="rounded-lg border border-brand-border bg-white px-2.5 py-1 text-xs font-semibold text-brand-ink">{bpm} BPM</span>
-            <span className="rounded-lg border border-brand-border bg-white px-2.5 py-1 text-xs font-semibold text-brand-ink">
-              {layers.length} stems
-            </span>
+          <p className="text-2xl font-medium tracking-tight text-white sm:text-[2.05rem]">{recorderTitle}</p>
+          <p className="text-lg leading-tight text-white/60">{recorderSubtitle}</p>
+          <div className="flex flex-wrap justify-center gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => toggleTopPopover("key")}
+              className="rounded-xl border border-white/5 bg-white/10 px-3 py-1.5 font-mono text-sm text-white/90 hover:bg-white/15"
+              aria-expanded={topPopover === "key"}
+            >
+              {keyChipLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleTopPopover("bpm")}
+              className="rounded-xl border border-white/5 bg-white/10 px-3 py-1.5 font-mono text-sm text-white/90 hover:bg-white/15"
+              aria-expanded={topPopover === "bpm"}
+            >
+              {bpm} BPM
+            </button>
           </div>
         </div>
 
-        <div className="mt-3 rounded-[22px] border border-brand-border bg-[#edf3e1] p-3">
-          <div className="relative overflow-hidden rounded-[18px] border border-brand-border bg-[#f7faef] p-3">
+        {topPopover && (
+          <>
+            <button
+              type="button"
+              aria-label="Close picker"
+              onClick={closeTopPopover}
+              className="absolute inset-0 z-10 cursor-default rounded-[30px] bg-transparent"
+            />
+            <div className="absolute inset-x-3 top-[8.8rem] z-20">
+              <div className="relative rounded-[24px] border border-white/10 bg-[#202125]/95 p-4 shadow-[0_24px_50px_rgba(0,0,0,0.45)] backdrop-blur">
+                <div className="pointer-events-none absolute left-1/2 top-0 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[4px] border-l border-t border-white/10 bg-[#202125]/95" />
+
+                {topPopover === "key" ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-5 gap-3">
+                      {ENHARMONIC_KEY_COLUMNS.map((col) => (
+                        <div key={`${col.sharp}-${col.flat}`} className="space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => selectSongKey(col.sharp)}
+                            className={`flex h-16 w-full items-center justify-center rounded-xl border text-2xl font-semibold ${
+                              songKeyRoot === col.sharp
+                                ? "border-white bg-white/10 text-white"
+                                : "border-white/10 bg-[#1a1b1f] text-white/85 hover:bg-white/5"
+                            }`}
+                          >
+                            {col.sharp}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => selectSongKey(col.flat)}
+                            className={`flex h-16 w-full items-center justify-center rounded-xl border text-2xl font-semibold ${
+                              songKeyRoot === col.flat
+                                ? "border-white bg-white/10 text-white"
+                                : "border-white/10 bg-[#1a1b1f] text-white/85 hover:bg-white/5"
+                            }`}
+                          >
+                            {col.flat}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-2">
+                      {NATURAL_KEYS.map((note) => (
+                        <button
+                          key={note}
+                          type="button"
+                          onClick={() => selectSongKey(note)}
+                          className={`h-14 rounded-xl border text-xl font-semibold ${
+                            songKeyRoot === note
+                              ? "border-white bg-white/10 text-white"
+                              : "border-white/10 bg-[#1a1b1f] text-white/85 hover:bg-white/5"
+                          }`}
+                        >
+                          {note}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setSongKeyModeAndDisableAuto("minor")}
+                        className={`h-16 rounded-2xl border text-2xl font-semibold ${
+                          songKeyMode === "minor"
+                            ? "border-white bg-white/10 text-white"
+                            : "border-white/10 bg-[#1a1b1f] text-white/75"
+                        }`}
+                      >
+                        Minor
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSongKeyModeAndDisableAuto("major")}
+                        className={`h-16 rounded-2xl border text-2xl font-semibold ${
+                          songKeyMode === "major"
+                            ? "border-white bg-white/10 text-white"
+                            : "border-white/10 bg-[#1a1b1f] text-white/75"
+                        }`}
+                      >
+                        Major
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <button
+                        type="button"
+                        onClick={() => void runAutoDetect("key")}
+                        disabled={autoAnalysisLoading !== null}
+                        className={`text-xl font-semibold ${
+                          songKeyAutoEnabled ? "text-white" : "text-white/35 hover:text-white/70"
+                        } disabled:opacity-50`}
+                      >
+                        {autoAnalysisLoading === "key" ? "Auto..." : "Auto"}
+                      </button>
+                      <button type="button" onClick={clearSongKeySelection} className="text-xl font-semibold text-white hover:text-[#ffe900]">
+                        Clear
+                      </button>
+                    </div>
+                    {autoAnalysisError && <p className="text-sm text-red-300">{autoAnalysisError}</p>}
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => applyBpmDelta(-1)}
+                        className="h-16 rounded-2xl border border-white/10 bg-[#1a1b1f] text-3xl font-semibold text-white hover:bg-white/5"
+                      >
+                        -
+                      </button>
+                      <div className="flex h-16 min-w-[11rem] items-center justify-center rounded-2xl border-2 border-white bg-[#202125] px-4 text-2xl font-semibold text-white">
+                        {bpm} BPM
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => applyBpmDelta(1)}
+                        className="h-16 rounded-2xl border border-white/10 bg-[#1a1b1f] text-3xl font-semibold text-white hover:bg-white/5"
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    <div className="relative h-16 rounded-xl bg-transparent">
+                      <div className="pointer-events-none absolute inset-x-2 top-1/2 -translate-y-1/2">
+                        <div className="flex items-center justify-between">
+                          {Array.from({ length: 33 }).map((_, index) => (
+                            <span
+                              key={index}
+                              className={`w-px rounded-full ${index % 8 === 0 ? "h-10 bg-white/40" : "h-7 bg-white/25"}`}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                      <div
+                        className="pointer-events-none absolute top-1/2 h-12 w-[3px] -translate-y-1/2 rounded-full bg-white"
+                        style={{ left: `calc(${((bpm - 40) / 200) * 100}% - 1.5px)` }}
+                      />
+                      <input
+                        type="range"
+                        min={40}
+                        max={240}
+                        value={bpm}
+                        onChange={(event) => applyBpmValue(Number(event.target.value))}
+                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                        aria-label="BPM picker"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <button
+                        type="button"
+                        onClick={() => void runAutoDetect("bpm")}
+                        disabled={autoAnalysisLoading !== null}
+                        className={`text-xl font-semibold ${bpmAutoEnabled ? "text-white" : "text-white/35 hover:text-white/70"} disabled:opacity-50`}
+                      >
+                        {autoAnalysisLoading === "bpm" ? "Auto..." : "Auto"}
+                      </button>
+                      <button type="button" onClick={clearBpmSelection} className="text-xl font-semibold text-white hover:text-[#ffe900]">
+                        Clear
+                      </button>
+                    </div>
+                    {autoAnalysisError && <p className="text-sm text-red-300">{autoAnalysisError}</p>}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        <div className="mt-4 rounded-[24px] border border-white/5 bg-transparent p-3">
+          <div className="relative overflow-hidden rounded-[16px] border border-white/5 bg-[#171717] p-3">
             <canvas ref={waveformCanvasRef} className="relative h-44 w-full sm:h-52" />
-            <div className="pointer-events-none absolute bottom-3 top-3 left-1/2 w-1 -translate-x-1/2 rounded bg-[#2A342C]" />
+            {showMultitrackLaneOverlay && (
+              <>
+                <div className="pointer-events-none absolute inset-x-3 bottom-3 h-[36%] bg-[#4a171d]/55" />
+                <div className="pointer-events-none absolute bottom-[18%] left-[28%] right-3 border-t-2 border-dotted border-red-500/90" />
+              </>
+            )}
+            <div
+              className="pointer-events-none absolute bottom-3 top-3 w-[3px] rounded bg-[#ffe900] shadow-[0_0_10px_rgba(255,233,0,0.4)]"
+              style={{ left: `calc(${Math.max(2, Math.min(98, playheadPercent))}% - 1.5px)` }}
+            />
             {recordingState === "recording" && (
-              <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-1 rounded-full border border-[#f1b0b0] bg-white/90 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-red-600">
+              <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-1 rounded-full border border-red-400/30 bg-black/50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-red-300">
                 <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
                 REC
               </div>
             )}
           </div>
 
-          <p className="mt-4 text-center font-mono text-2xl tracking-wider text-brand-ink">
+          <p className="mt-4 text-center font-mono text-2xl tracking-wide text-white/90">
             {formatDuration(recordingSeconds)} / {formatDuration(displayedTotalDuration)}
           </p>
 
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            <Button
-              variant="secondary"
-              className="h-12 rounded-xl border-brand-border bg-white text-base text-brand-ink hover:bg-[#eff4e6]"
-              onClick={resetRecorderSession}
-            >
-              New
-            </Button>
-            <Button className="h-12 rounded-xl bg-[#2A342C] text-base font-semibold text-white hover:bg-[#1F2822]" onClick={handlePrimaryAction}>
-              {primaryActionLabel}
-            </Button>
-            <Button
-              variant="secondary"
-              className="h-12 rounded-xl border-brand-border bg-white text-base text-brand-ink hover:bg-[#eff4e6] disabled:opacity-40"
-              disabled={!canStop}
-              onClick={stopRecording}
-            >
-              Stop
-            </Button>
-          </div>
+          {!showPendingTakeReview ? (
+            <>
+              <div className="mt-5 grid grid-cols-3 items-center gap-3">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="h-14 rounded-2xl border-white/10 bg-white/5 text-base font-medium text-white hover:bg-white/10"
+                  onClick={resetRecorderSession}
+                >
+                  New take
+                </Button>
+                <Button
+                  type="button"
+                  className="h-14 rounded-2xl bg-[#ffe900] text-base font-semibold text-black hover:bg-[#fff04a]"
+                  onClick={handlePrimaryAction}
+                >
+                  {primaryActionLabel}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="h-14 rounded-2xl border-white/10 bg-white/5 text-base font-medium text-white hover:bg-white/10 disabled:opacity-40"
+                  disabled={!canStop}
+                  onClick={stopRecording}
+                >
+                  Save
+                </Button>
+              </div>
 
-          <p className="mt-3 text-center text-xs text-brand-muted">{statusHint}</p>
+              <p className="mt-3 text-center text-xs text-white/45">{statusHint}</p>
+            </>
+          ) : (
+            <div className="mt-6 h-10" />
+          )}
         </div>
 
-        <div className="mt-3 rounded-[18px] border border-brand-border bg-white/85 p-2">
-          <div className="flex items-center gap-2">
-            {([
-              { id: "adjust", label: "Adjust" },
-              { id: "stems", label: "Stems" },
-              { id: "mix", label: "Mix" }
-            ] as const).map((tab) => (
+        {showPendingTakeReview && (
+          <div className="mt-10 flex min-h-[22rem] items-end px-2">
+            <div className="grid w-full grid-cols-2 gap-4">
               <button
-                key={tab.id}
                 type="button"
-                onClick={() => setActivePanel(tab.id)}
-                className={`rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
-                  activePanel === tab.id ? "bg-[#2A342C] text-white" : "bg-[#eef3e6] text-brand-ink hover:bg-[#e6eddc]"
-                }`}
+                onClick={discardPendingRecordedTake}
+                className="h-16 rounded-2xl border border-white/5 bg-white/5 text-2xl font-semibold text-white/90 hover:bg-white/10"
               >
-                {tab.label}
+                Cancel
               </button>
-            ))}
-            <button
-              type="button"
-              aria-label={recordingState === "recording" ? "Pause recording" : "Start recording"}
-              onClick={handlePrimaryAction}
-              className={`ml-auto flex h-10 w-10 items-center justify-center rounded-full border ${
-                recordingState === "recording"
-                  ? "border-red-200 bg-red-500/90 text-white"
-                  : "border-brand-border bg-white text-brand-ink"
-              }`}
-            >
-              <span className={`h-3 w-3 ${recordingState === "recording" ? "rounded-sm bg-white" : "rounded-full bg-red-500"}`} />
-            </button>
+              <button
+                type="button"
+                onClick={commitPendingRecordedTake}
+                className="h-16 rounded-2xl bg-[#ff4044] text-2xl font-semibold text-white hover:bg-[#ff5357]"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!showPendingTakeReview && lastRecordedLayer && recordingState !== "recording" && (
+          <div className="mt-3 rounded-[18px] border border-white/5 bg-[#1a1b1f] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/45">Last Take Preview</p>
+                <p className="text-sm text-white/45">
+                  Прослушай только последний записанный дубль, чтобы решить, оставлять его или перезаписать.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg border border-white/5 bg-[#141519] px-2.5 py-1 text-xs font-semibold text-white/80">
+                  {lastTakePreviewBadge}
+                </span>
+                <span className="rounded-lg border border-white/5 bg-[#141519] px-2.5 py-1 text-xs font-semibold text-white/70">
+                  {formatDuration(lastRecordedLayer.durationSec)}
+                </span>
+              </div>
+            </div>
+            {fxPreviewStatus === "processing" && lastTakeNeedsProcessedPreview && (
+              <p className="mb-2 text-xs text-white/45">Processing preview...</p>
+            )}
+            {fxPreviewStatus === "error" && fxPreviewError && (
+              <p className="mb-2 text-xs text-[#a4372a]">Preview render error, dry fallback: {fxPreviewError}</p>
+            )}
+            <AudioWaveformPlayer src={lastTakePreviewSrc} barCount={96} loopRangePercent={loopPreviewRange} />
+          </div>
+        )}
+
+          <div className={`mt-4 rounded-[22px] border border-white/5 bg-[#1b1c20]/95 p-2 ${showPendingTakeReview ? "hidden" : ""}`}>
+            <div className="flex items-center gap-2">
+              {([
+                { id: "adjust", label: "Adjust" },
+                { id: "stems", label: "Stems" },
+                { id: "fx", label: "EQ" }
+              ] as const).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActivePanel(tab.id)}
+                  className={`rounded-2xl px-6 py-3 text-base font-semibold transition-colors ${
+                    activePanel === tab.id
+                      ? "bg-[#26282d] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+                      : "bg-transparent text-white/55 hover:text-white/85"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                aria-label={recordingState === "recording" ? "Pause recording" : "Start recording"}
+                onClick={handlePrimaryAction}
+                className="ml-auto flex h-14 w-16 items-center justify-center rounded-2xl border border-white/5 bg-[#141519] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+              >
+                <span className={`block h-6 w-6 ${recordingState === "recording" ? "rounded-sm bg-red-500" : "rounded-full bg-red-500"}`} />
+              </button>
+            </div>
           </div>
 
-          <div className="mt-2 rounded-[14px] border border-brand-border bg-[#f7faef] p-3">
+          <div className={`mt-3 rounded-[22px] border border-white/5 bg-[#222327] p-3 ${showPendingTakeReview ? "hidden" : ""}`}>
             {activePanel === "adjust" && (
               <div className="space-y-3">
-                <div className="grid gap-2 sm:grid-cols-[84px_110px_1fr]">
-                  <div className="flex items-center justify-center rounded-xl border border-brand-border bg-white px-3 py-2 text-sm font-medium">
-                    BPM
+                <div className="rounded-2xl border border-white/5 bg-[#1a1b1f] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex rounded-xl border border-white/5 bg-[#101114] p-1">
+                      <button
+                        type="button"
+                        onClick={() => setAdjustMode("varispeed")}
+                        className={`rounded-lg px-3 py-2 text-xs font-semibold tracking-[0.08em] ${
+                          adjustMode === "varispeed"
+                            ? "bg-[#ffe900] text-black shadow-sm"
+                            : "text-white/50 hover:text-white"
+                        }`}
+                      >
+                        VARISPEED
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAdjustMode("gain")}
+                        className={`rounded-lg px-3 py-2 text-xs font-semibold tracking-[0.08em] ${
+                          adjustMode === "gain"
+                            ? "bg-[#ffe900] text-black shadow-sm"
+                            : "text-white/50 hover:text-white"
+                        }`}
+                      >
+                        GAIN
+                      </button>
+                    </div>
+
+                    <div className="ml-auto flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-2 rounded-xl border border-white/5 bg-[#101114] px-2 py-1.5">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/45">BPM</span>
+                        <Input
+                          type="number"
+                          min={40}
+                          max={240}
+                          value={bpmInputValue}
+                          onChange={(event) => handleBpmInputChange(event.target.value)}
+                          onBlur={commitBpmInput}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.currentTarget.blur();
+                            }
+                          }}
+                          className="h-8 w-20 rounded-lg border-white/10 bg-[#222327] px-2 text-center text-sm text-white"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setMetronomeEnabled((prev) => !prev)}
+                        className={`rounded-xl border px-3 py-2 text-xs font-semibold tracking-[0.08em] ${
+                          metronomeEnabled
+                            ? "border-[#ffe900]/40 bg-[#ffe900] text-black"
+                            : "border-white/10 bg-[#141519] text-white/55"
+                        }`}
+                      >
+                        {metronomeEnabled ? "METRO ON" : "METRO OFF"}
+                      </button>
+                    </div>
                   </div>
-                  <Input
-                    type="number"
-                    min={40}
-                    max={240}
-                    value={String(bpm)}
-                    onChange={(event) => setBpm(Math.min(240, Math.max(40, Number(event.target.value) || 90)))}
-                    className="h-10 rounded-xl border-brand-border bg-white text-center"
-                  />
-                  <Button
-                    type="button"
-                    variant={metronomeEnabled ? "primary" : "secondary"}
-                    className="h-10 rounded-xl"
-                    onClick={() => setMetronomeEnabled((prev) => !prev)}
-                  >
-                    {metronomeEnabled ? "Metronome On" : "Metronome Off"}
-                  </Button>
                 </div>
 
-                <div className="rounded-xl border border-brand-border bg-white p-3">
-                  <div className="mb-2 flex items-center justify-between text-xs font-medium uppercase tracking-wider text-brand-muted">
-                    <span>Input level</span>
-                    <span>{Math.round(signalLevel * 100)}%</span>
+                <div className="rounded-2xl border border-white/5 bg-[#1a1b1f] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                  <div className="mb-3 flex items-center justify-between px-1">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/45">Adjust</p>
+                      <p className="text-sm text-white/45">
+                        {adjustMode === "varispeed"
+                          ? "Темп и тональность для удобной записи и поиска кармана."
+                          : "Визуальные gain-контролы для предварительной настройки сессии."}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-white/5 bg-[#101114] px-3 py-2 text-right">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/45">Input</p>
+                      <p className="font-mono text-sm font-semibold text-white/85">{Math.round(signalLevel * 100)}%</p>
+                    </div>
                   </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-[#e3ebd9]">
-                    <div
-                      className={`h-full rounded-full transition-[width,background-color] duration-150 ${
-                        signalLevel > 0.62 ? "bg-[#d75f5f]" : "bg-[#2A342C]"
-                      }`}
-                      style={{ width: `${Math.max(2, Math.round(signalLevel * 100))}%` }}
-                    />
-                  </div>
-                </div>
 
-                <div className="rounded-xl border border-brand-border bg-white p-3">
-                  <div className="mb-2 flex items-center justify-between text-xs font-medium uppercase tracking-wider text-brand-muted">
-                    <span>Session</span>
-                    <span>{layers.length} stems</span>
+                  <div className="space-y-3">
+                    {adjustMode === "varispeed" ? (
+                      <>
+                        <AdjustRailSlider
+                          label="Speed"
+                          min={50}
+                          max={150}
+                          value={varispeedPercent}
+                          valueLabel={`${varispeedPercent}%`}
+                          centerValue={100}
+                          onChange={setVarispeedPercent}
+                        />
+                        <AdjustRailSlider
+                          label="Pitch"
+                          min={-12}
+                          max={12}
+                          value={pitchSemitones}
+                          valueLabel={`${pitchSemitones > 0 ? "+" : ""}${pitchSemitones} st`}
+                          centerValue={0}
+                          onChange={setPitchSemitones}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <AdjustRailSlider
+                          label="Input"
+                          min={0}
+                          max={200}
+                          value={inputGainPercent}
+                          valueLabel={`${inputGainPercent}%`}
+                          centerValue={100}
+                          onChange={setInputGainPercent}
+                        />
+                        <AdjustRailSlider
+                          label="Output"
+                          min={0}
+                          max={200}
+                          value={outputGainPercent}
+                          valueLabel={`${outputGainPercent}%`}
+                          centerValue={100}
+                          onChange={setOutputGainPercent}
+                        />
+                      </>
+                    )}
                   </div>
-                  <p className="text-sm text-brand-muted">
-                    {layers.length
-                      ? "При записи новой дорожки активные дорожки воспроизводятся в фоне."
-                      : "Нажми Record, чтобы записать первую дорожку."}
-                  </p>
+
+                  <div className="mt-4 rounded-2xl border border-white/5 bg-[#141519] p-3">
+                    <div className="mb-2 flex items-center justify-between text-xs font-medium uppercase tracking-wider text-white/50">
+                      <span>Loop Window</span>
+                      <span>
+                        {loopStartPercent}% - {loopEndPercent}%
+                      </span>
+                    </div>
+
+                    <div className="relative h-14 rounded-xl border border-white/5 bg-[#101114]">
+                      <div className="pointer-events-none absolute inset-x-3 top-1/2 h-px -translate-y-1/2 border-t border-dotted border-white/20" />
+                      <div className="pointer-events-none absolute inset-y-0 left-3 right-3">
+                        <div
+                          className="absolute bottom-2 top-2 rounded-lg border border-[#ffe900]/40 bg-[#ffe900]/12"
+                          style={{
+                            left: `${loopStartPercent}%`,
+                            right: `${100 - loopEndPercent}%`
+                          }}
+                        />
+                        <div
+                          className="absolute bottom-1.5 top-1.5 w-2 rounded-full bg-[#ffe900] shadow-[0_0_0_2px_rgba(0,0,0,0.35)]"
+                          style={{ left: `calc(${loopStartPercent}% - 4px)` }}
+                        />
+                        <div
+                          className="absolute bottom-1.5 top-1.5 w-2 rounded-full bg-white shadow-[0_0_0_2px_rgba(0,0,0,0.35)]"
+                          style={{ left: `calc(${loopEndPercent}% - 4px)` }}
+                        />
+                      </div>
+
+                      <input
+                        type="range"
+                        min={0}
+                        max={99}
+                        value={loopStartPercent}
+                        onChange={(event) =>
+                          setLoopStartPercent(Math.min(loopEndPercent - 1, Math.max(0, Number(event.target.value) || 0)))
+                        }
+                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                        aria-label="Loop start"
+                      />
+                      <input
+                        type="range"
+                        min={1}
+                        max={100}
+                        value={loopEndPercent}
+                        onChange={(event) =>
+                          setLoopEndPercent(Math.max(loopStartPercent + 1, Math.min(100, Number(event.target.value) || 100)))
+                        }
+                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                        aria-label="Loop end"
+                      />
+                    </div>
+
+                    <p className="mt-2 text-xs text-white/45">
+                      {layers.length
+                        ? "Loop preview работает в блоке Last Take Preview и зацикливает выбранный фрагмент последнего тейка."
+                        : "Запиши первую дорожку, затем используй adjust-панель для настройки перед следующими тейками."}
+                    </p>
+                  </div>
                 </div>
               </div>
             )}
 
             {activePanel === "stems" && (
-              <div className="space-y-2">
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-white/5 bg-[#1a1b1f] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      className="rounded-xl bg-[#ffe900] text-black hover:bg-[#fff04a] disabled:bg-white/10 disabled:text-white/60"
+                      onClick={() => void renderStemsPreview()}
+                      disabled={!layers.length || sessionRenderBusy}
+                    >
+                      {stemsPreviewStatus === "processing" ? "Rendering..." : "Preview All Stems"}
+                    </Button>
+                    <p className="text-sm text-white/45">
+                      {layers.length
+                        ? "Быстрый preview всех активных дорожек перед финальным mix."
+                        : "Сначала запиши хотя бы одну дорожку."}
+                    </p>
+                  </div>
+                  {stemsPreviewError && <p className="mt-2 text-xs text-[#a4372a]">{stemsPreviewError}</p>}
+                </div>
+
+                {stemsPreviewUrl ? (
+                  <div className="rounded-xl border border-white/5 bg-[#141519] p-3">
+                    <p className="mb-2 text-xs font-medium uppercase tracking-wider text-white/45">Stems Preview</p>
+                    <AudioWaveformPlayer src={stemsPreviewUrl} barCount={140} />
+                  </div>
+                ) : stemsPreviewStatus === "processing" ? (
+                  <div className="rounded-xl border border-dashed border-white/10 bg-[#141519] p-4 text-center text-sm text-white/45">
+                    Собираем общий preview дорожек...
+                  </div>
+                ) : null}
+
                 {layers.length === 0 ? (
-                  <p className="rounded-xl border border-dashed border-brand-border bg-white p-4 text-center text-sm text-brand-muted">
+                  <p className="rounded-xl border border-dashed border-white/10 bg-[#141519] p-4 text-center text-sm text-white/45">
                     Пока нет дорожек. Запиши первую, и они появятся здесь.
                   </p>
                 ) : (
                   layers.map((layer) => (
-                    <div key={layer.id} className="space-y-2 rounded-xl border border-brand-border bg-white p-3">
-                      <div className="grid gap-2 md:grid-cols-[1fr_96px_96px]">
+                    <div key={layer.id} className="space-y-2 rounded-xl border border-white/5 bg-[#141519] p-3">
+                      <div className="flex items-center gap-2">
                         <Input
                           value={layer.name}
                           onChange={(event) =>
@@ -845,29 +2152,36 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
                               prev.map((current) => (current.id === layer.id ? { ...current, name: event.target.value } : current))
                             )
                           }
-                          className="border-brand-border bg-white text-brand-ink"
+                          className="min-w-0 flex-1 border-white/10 bg-[#202127] text-white"
                         />
                         <Button
                           variant="secondary"
-                          className="border-brand-border bg-white text-brand-ink hover:bg-[#eff4e6]"
+                          className={`h-8 w-8 shrink-0 rounded-lg border-white/10 p-0 text-white hover:bg-white/10 ${
+                            layer.muted ? "bg-[#26282d]" : "bg-[#1a1b1f]"
+                          }`}
                           onClick={() =>
                             setLayers((prev) =>
                               prev.map((current) => (current.id === layer.id ? { ...current, muted: !current.muted } : current))
                             )
                           }
+                          aria-label={layer.muted ? "Включить звук дорожки" : "Выключить звук дорожки"}
+                          title={layer.muted ? "Включить звук" : "Выключить звук"}
                         >
-                          {layer.muted ? "Unmute" : "Mute"}
+                          {layer.muted ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
                         </Button>
                         <Button
                           variant="secondary"
-                          className="border-brand-border bg-white text-brand-ink hover:bg-[#eff4e6]"
+                          className="h-8 w-8 shrink-0 rounded-lg border-white/10 bg-[#1a1b1f] p-0 text-white hover:bg-white/10"
                           onClick={() => removeLayer(layer.id)}
+                          aria-label="Удалить дорожку"
+                          title="Удалить"
                         >
-                          Delete
+                          <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
+                      <AudioWaveformPlayer src={layer.url} barCount={120} className="w-full min-w-0" />
                       <div className="flex items-center gap-3">
-                        <span className="w-16 text-xs font-medium uppercase tracking-wider text-brand-muted">Volume</span>
+                        <span className="w-16 text-xs font-medium uppercase tracking-wider text-white/45">Volume</span>
                         <input
                           type="range"
                           min={0}
@@ -880,41 +2194,122 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
                               )
                             )
                           }
-                          className="h-2 w-full cursor-pointer accent-[#2A342C]"
+                          className="h-2 w-full cursor-pointer accent-[#ffe900]"
                         />
-                        <span className="w-10 text-right text-xs text-brand-muted">{Math.round(layer.volume * 100)}%</span>
+                        <span className="w-10 text-right text-xs text-white/55">{Math.round(layer.volume * 100)}%</span>
                       </div>
-                      <p className="text-xs text-brand-muted">{formatDuration(layer.durationSec)}</p>
+                      <p className="text-xs text-white/45">{formatDuration(layer.durationSec)}</p>
                     </div>
                   ))
                 )}
               </div>
             )}
+            {activePanel === "fx" && (
+              <div className="space-y-3">
+                {!lastRecordedLayer || !lastRecordedLayerFxSettings ? (
+                  <div className="rounded-2xl border border-dashed border-white/10 bg-[#141519] p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/45">Equalizer</p>
+                    <p className="mt-1 text-sm text-white/45">Сначала запиши дубль, чтобы открыть EQ-панель.</p>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-white/5 bg-[#1a1b1f] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-2xl font-semibold tracking-tight text-white">Equalizer</p>
+                        <p className="text-sm text-white/45">
+                          {lastRecordedLayer.name} • {formatDuration(lastRecordedLayer.durationSec)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setFxBlockEnabled("eq", !lastRecordedLayerFxSettings.eq.enabled)}
+                        className={
+                          lastRecordedLayerFxSettings.eq.enabled
+                            ? "rounded-2xl bg-[#ffe900] px-4 py-2 text-sm font-semibold text-black"
+                            : "rounded-2xl border border-white/10 bg-[#141519] px-4 py-2 text-sm font-semibold text-white/60"
+                        }
+                      >
+                        {lastRecordedLayerFxSettings.eq.enabled ? "BYPASS" : "ENABLE"}
+                      </button>
+                    </div>
 
+                    <FxEqGraphPanel
+                      bands={lastRecordedLayerFxSettings.eq.bands}
+                      onBandToggle={(index) =>
+                        updateFxForLastRecorded((prev) => ({
+                          ...prev,
+                          eq: {
+                            ...prev.eq,
+                            bands: prev.eq.bands.map((current, bandIndex) =>
+                              bandIndex === index ? { ...current, enabled: !current.enabled } : current
+                            )
+                          }
+                        }))
+                      }
+                      onBandGainChange={(index, nextGainDb) =>
+                        updateFxForLastRecorded((prev) => ({
+                          ...prev,
+                          eq: {
+                            ...prev.eq,
+                            bands: prev.eq.bands.map((current, bandIndex) =>
+                              bandIndex === index ? { ...current, gainDb: nextGainDb } : current
+                            )
+                          }
+                        }))
+                      }
+                    />
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="h-10 rounded-xl border-white/10 bg-[#141519] text-white hover:bg-white/10"
+                        onClick={() => void renderFxPreviewNow()}
+                        disabled={fxPreviewStatus === "processing"}
+                      >
+                        {fxPreviewStatus === "processing" ? "Rendering..." : "Refresh preview"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="h-10 rounded-xl border-white/10 bg-[#141519] text-white hover:bg-white/10"
+                        onClick={bypassAllFx}
+                      >
+                        Bypass all FX
+                      </Button>
+                    </div>
+                    {fxPreviewError && <p className="mt-2 text-xs text-red-300">{fxPreviewError}</p>}
+                  </div>
+                )}
+              </div>
+            )}
             {activePanel === "mix" && (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button className="rounded-xl bg-[#2A342C] text-white hover:bg-[#1F2822]" onClick={renderMixdown} disabled={!layers.length || mixing}>
+                  <Button
+                    className="rounded-xl border border-white/10 bg-[#141519] text-white hover:bg-white/10"
+                    onClick={renderMixdown}
+                    disabled={!layers.length || sessionRenderBusy}
+                  >
                     {mixing ? "Rendering..." : "Render Mix"}
                   </Button>
-                  <p className="text-sm text-brand-muted">
+                  <p className="text-sm text-white/45">
                     {layers.length ? "Сводит активные дорожки в один файл." : "Сначала запиши хотя бы одну дорожку."}
                   </p>
                 </div>
                 {mixPreviewUrl ? (
-                  <div className="space-y-2 rounded-xl border border-brand-border bg-white p-3">
-                    <p className="text-xs font-medium uppercase tracking-wider text-brand-muted">Preview</p>
+                  <div className="space-y-2 rounded-xl border border-white/5 bg-[#141519] p-3">
+                    <p className="text-xs font-medium uppercase tracking-wider text-white/45">Preview</p>
                     <AudioWaveformPlayer src={mixPreviewUrl} barCount={160} />
                   </div>
                 ) : (
-                  <div className="rounded-xl border border-dashed border-brand-border bg-white p-4 text-center text-sm text-brand-muted">
+                  <div className="rounded-xl border border-dashed border-white/10 bg-[#141519] p-4 text-center text-sm text-white/45">
                     После `Render Mix` здесь появится предпросмотр волны.
                   </div>
                 )}
               </div>
             )}
           </div>
-        </div>
       </div>
     </div>
   );

@@ -34,11 +34,36 @@ enum DemoVersionType {
   NO_MIX
   MIXED
   MASTERED
+  RELEASE
+}
+
+enum DistributionRequestStatus {
+  SUBMITTED
+}
+
+enum DistributionYesNo {
+  YES
+  NO
+}
+
+enum DistributionDistributor {
+  ONE_RPM
+  DISTROKID
+  TUNECORE
+  FRESHTUNES
+  ZVONKO
+  BELIEVE
+  OTHER
 }
 
 enum ProjectCoverType {
   GRADIENT
   IMAGE
+}
+
+enum ProjectReleaseKind {
+  SINGLE
+  ALBUM
 }
 
 model User {
@@ -60,6 +85,7 @@ model User {
   folders              Folder[]
   projects             Project[]
   tracks               Track[]
+  trackDistributionRequests TrackDistributionRequest[]
   checkIns             DailyCheckIn[]
   weeklyActivities     WeeklyActivity[]
   microSteps           DailyMicroStep[]
@@ -108,6 +134,7 @@ model Project {
   folderId       String?
   title          String
   artistLabel    String?
+  releaseKind    ProjectReleaseKind @default(ALBUM)
   coverType      ProjectCoverType @default(GRADIENT)
   coverImageUrl  String?
   coverPresetKey String?
@@ -135,6 +162,13 @@ model Track {
   projectId     String?
   primaryDemoId String?
   pathStageId   Int?
+  displayBpm    Float?
+  displayBpmConfidence Float?
+  displayKeyRoot String?
+  displayKeyMode String?
+  displayKeyConfidence Float?
+  displayAnalysisSource String?
+  displayAnalysisUpdatedAt DateTime?
   sortIndex     Int        @default(0)
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
@@ -144,6 +178,7 @@ model Track {
   primaryDemo   Demo?      @relation("TrackPrimaryDemo", fields: [primaryDemoId], references: [id], onDelete: SetNull)
   pathStage     PathStage? @relation(fields: [pathStageId], references: [id], onDelete: SetNull)
   demos         Demo[]     @relation("TrackDemos")
+  distributionRequest TrackDistributionRequest?
 
   @@index([projectId, sortIndex])
   @@index([primaryDemoId])
@@ -155,13 +190,51 @@ model Demo {
   audioUrl         String
   textNote         String?
   duration         Int
+  releaseDate      DateTime?       @db.Date
+  detectedBpm      Float?
+  detectedBpmConfidence Float?
+  detectedKeyRoot  String?
+  detectedKeyMode  String?
+  detectedKeyConfidence Float?
+  detectedAnalysisSource String?
+  detectedAnalysisVersion String?
+  detectedAt       DateTime?
   versionType      DemoVersionType @default(DEMO)
   sortIndex        Int             @default(0)
   createdAt        DateTime        @default(now())
   track            Track           @relation("TrackDemos", fields: [trackId], references: [id], onDelete: Cascade)
   primaryForTracks Track[]         @relation("TrackPrimaryDemo")
+  distributionRequests TrackDistributionRequest[] @relation("DistributionRequestMasterDemo")
 
   @@index([trackId, versionType, sortIndex])
+}
+
+model TrackDistributionRequest {
+  id                   String                    @id @default(cuid())
+  userId               String
+  trackId              String                    @unique
+  masterDemoId         String
+  artistName           String
+  releaseTitle         String
+  releaseDate          DateTime                  @db.Date
+  genre                String
+  explicitContent      DistributionYesNo
+  usesAi               DistributionYesNo
+  promoPitchText       String?
+  managerHelpRequested Boolean                   @default(false)
+  distributor          DistributionDistributor
+  distributorOtherName String?
+  status               DistributionRequestStatus @default(SUBMITTED)
+  submittedAt          DateTime                  @default(now())
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+  user                 User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track                Track                     @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  masterDemo           Demo                      @relation("DistributionRequestMasterDemo", fields: [masterDemoId], references: [id])
+
+  @@index([userId, submittedAt])
+  @@index([masterDemoId])
+  @@index([status])
 }
 
 model PathStage {

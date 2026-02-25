@@ -10,6 +10,7 @@ type AudioWaveformPlayerProps = {
   src: string;
   className?: string;
   barCount?: number;
+  loopRangePercent?: { start: number; end: number };
 };
 
 function formatTime(seconds: number) {
@@ -35,7 +36,11 @@ function buildPeaks(channelData: Float32Array, barCount: number) {
   return peaks;
 }
 
-export function AudioWaveformPlayer({ src, className = "", barCount = 120 }: AudioWaveformPlayerProps) {
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+export function AudioWaveformPlayer({ src, className = "", barCount = 120, loopRangePercent }: AudioWaveformPlayerProps) {
   const [peaks, setPeaks] = useState<number[]>(Array.from({ length: barCount }, () => 0.06));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -51,6 +56,23 @@ export function AudioWaveformPlayer({ src, className = "", barCount = 120 }: Aud
     if (!duration) return 0;
     return Math.max(0, Math.min(1, currentTime / duration));
   }, [currentTime, duration]);
+
+  const normalizedLoopRange = useMemo(() => {
+    if (!loopRangePercent) return null;
+    const start = clamp(Number(loopRangePercent.start) || 0, 0, 99);
+    const end = clamp(Number(loopRangePercent.end) || 100, 1, 100);
+    if (end <= start) return null;
+    if (start === 0 && end === 100) return null;
+    return { start, end };
+  }, [loopRangePercent]);
+
+  const loopRangeSeconds = useMemo(() => {
+    if (!normalizedLoopRange || !duration) return null;
+    const startSec = (normalizedLoopRange.start / 100) * duration;
+    const endSec = (normalizedLoopRange.end / 100) * duration;
+    if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) return null;
+    return { startSec, endSec };
+  }, [duration, normalizedLoopRange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,7 +133,7 @@ export function AudioWaveformPlayer({ src, className = "", barCount = 120 }: Aud
     const barWidth = width / peaks.length;
 
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(135,166,118,0.12)";
+    ctx.fillStyle = "#101114";
     ctx.fillRect(0, 0, width, height);
 
     for (let i = 0; i < peaks.length; i += 1) {
@@ -121,16 +143,43 @@ export function AudioWaveformPlayer({ src, className = "", barCount = 120 }: Aud
       const y = midY - barHeight / 2;
 
       const ratio = i / peaks.length;
-      ctx.fillStyle = ratio <= progress ? "#2E5B45" : "rgba(111,127,115,0.45)";
+      ctx.fillStyle = ratio <= progress ? "#ffffff" : "rgba(255,255,255,0.35)";
       ctx.fillRect(x, y, Math.max(1, barWidth * 0.72), barHeight);
     }
 
     const markerX = progress * width;
-    ctx.fillStyle = "#87A676";
+    ctx.fillStyle = "#ffe900";
     ctx.globalAlpha = 0.95;
     ctx.fillRect(markerX, 0, Math.max(2, barWidth * 0.8), height);
     ctx.globalAlpha = 1;
-  }, [peaks, progress]);
+    if (normalizedLoopRange) {
+      const left = (normalizedLoopRange.start / 100) * width;
+      const right = (normalizedLoopRange.end / 100) * width;
+      const loopWidth = Math.max(2, right - left);
+      ctx.fillStyle = "rgba(231,240,74,0.16)";
+      ctx.fillRect(left, 0, loopWidth, height);
+      ctx.strokeStyle = "rgba(42,52,44,0.38)";
+      ctx.lineWidth = Math.max(1, dpr);
+      ctx.setLineDash([4 * dpr, 3 * dpr]);
+      ctx.beginPath();
+      ctx.moveTo(left, 0);
+      ctx.lineTo(left, height);
+      ctx.moveTo(right, 0);
+      ctx.lineTo(right, height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }, [normalizedLoopRange, peaks, progress]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !loopRangeSeconds) return;
+    const epsilon = Math.max(0.01, duration * 0.0025);
+    if (audio.currentTime < loopRangeSeconds.startSec || audio.currentTime > loopRangeSeconds.endSec - epsilon) {
+      audio.currentTime = loopRangeSeconds.startSec;
+      setCurrentTime(loopRangeSeconds.startSec);
+    }
+  }, [duration, loopRangeSeconds]);
 
   useEffect(() => {
     function onAudioFocus(event: Event) {
@@ -149,6 +198,13 @@ export function AudioWaveformPlayer({ src, className = "", barCount = 120 }: Aud
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
+      if (loopRangeSeconds) {
+        const epsilon = Math.max(0.01, duration * 0.0025);
+        if (audio.currentTime < loopRangeSeconds.startSec || audio.currentTime > loopRangeSeconds.endSec - epsilon) {
+          audio.currentTime = loopRangeSeconds.startSec;
+          setCurrentTime(loopRangeSeconds.startSec);
+        }
+      }
       audio.play().catch(() => null);
     } else {
       audio.pause();
@@ -162,27 +218,37 @@ export function AudioWaveformPlayer({ src, className = "", barCount = 120 }: Aud
     const bounds = canvas.getBoundingClientRect();
     const x = event.clientX - bounds.left;
     const ratio = Math.max(0, Math.min(1, x / bounds.width));
-    audio.currentTime = ratio * duration;
+    let nextTime = ratio * duration;
+    if (loopRangeSeconds) {
+      nextTime = clamp(nextTime, loopRangeSeconds.startSec, loopRangeSeconds.endSec);
+    }
+    audio.currentTime = nextTime;
+    setCurrentTime(nextTime);
   }
 
   return (
     <div className={`min-w-0 space-y-2 ${className}`.trim()}>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <Button type="button" variant="secondary" className="shrink-0" onClick={togglePlayback}>
+        <Button
+          type="button"
+          variant="secondary"
+          className="shrink-0 border-white/10 bg-[#141519] text-white hover:bg-white/10"
+          onClick={togglePlayback}
+        >
           {playing ? "Пауза" : "Слушать"}
         </Button>
-        <div className="relative min-w-0 flex-1 overflow-hidden rounded-md border border-brand-border">
-          <canvas ref={canvasRef} onClick={seekTo} className="h-16 w-full cursor-pointer bg-brand-surface" />
-          {loading && <div className="pointer-events-none absolute inset-0 animate-pulse bg-[#dfe8d2]/60" />}
+        <div className="relative min-w-0 flex-1 overflow-hidden rounded-md border border-white/10 bg-[#101114]">
+          <canvas ref={canvasRef} onClick={seekTo} className="h-16 w-full cursor-pointer bg-[#101114]" />
+          {loading && <div className="pointer-events-none absolute inset-0 animate-pulse bg-white/5" />}
         </div>
       </div>
 
-      <div className="flex min-w-0 items-center justify-between gap-3 text-xs text-brand-muted">
+      <div className="flex min-w-0 items-center justify-between gap-3 text-xs text-white/45">
         <span>{formatTime(currentTime)}</span>
         <span>{formatTime(duration)}</span>
       </div>
 
-      {error && <p className="text-xs text-brand-muted">{error}</p>}
+      {error && <p className="text-xs text-white/45">{error}</p>}
 
       <audio
         ref={audioRef}
@@ -193,7 +259,18 @@ export function AudioWaveformPlayer({ src, className = "", barCount = 120 }: Aud
           window.dispatchEvent(new CustomEvent(AUDIO_FOCUS_EVENT, { detail: { sourceId: sourceIdRef.current } }));
         }}
         onPause={() => setPlaying(false)}
-        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onTimeUpdate={(event) => {
+          const audio = event.currentTarget;
+          if (loopRangeSeconds) {
+            const epsilon = Math.max(0.01, duration * 0.0025);
+            if (audio.currentTime >= loopRangeSeconds.endSec - epsilon) {
+              audio.currentTime = loopRangeSeconds.startSec;
+              setCurrentTime(loopRangeSeconds.startSec);
+              return;
+            }
+          }
+          setCurrentTime(audio.currentTime);
+        }}
         onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
         onEnded={() => setPlaying(false)}
         className="hidden"

@@ -18,6 +18,42 @@ function buildMiniBars(count: number) {
   return Array.from({ length: count }, (_, idx) => 0.2 + (((idx * 17) % 10) / 10) * 0.75);
 }
 
+function hexToRgb(color: string) {
+  const value = color.trim();
+  const hex = value.startsWith("#") ? value.slice(1) : value;
+  if (hex.length === 3) {
+    const [r, g, b] = hex.split("");
+    const rr = Number.parseInt(`${r}${r}`, 16);
+    const gg = Number.parseInt(`${g}${g}`, 16);
+    const bb = Number.parseInt(`${b}${b}`, 16);
+    if ([rr, gg, bb].some((item) => Number.isNaN(item))) return null;
+    return { r: rr, g: gg, b: bb };
+  }
+  if (hex.length !== 6) return null;
+  const rr = Number.parseInt(hex.slice(0, 2), 16);
+  const gg = Number.parseInt(hex.slice(2, 4), 16);
+  const bb = Number.parseInt(hex.slice(4, 6), 16);
+  if ([rr, gg, bb].some((item) => Number.isNaN(item))) return null;
+  return { r: rr, g: gg, b: bb };
+}
+
+function mixHexColors(colorA: string, colorB: string, ratio: number) {
+  const a = hexToRgb(colorA);
+  const b = hexToRgb(colorB);
+  if (!a || !b) return null;
+  const t = Math.min(Math.max(ratio, 0), 1);
+  const r = Math.round(a.r + (b.r - a.r) * t);
+  const g = Math.round(a.g + (b.g - a.g) * t);
+  const bCh = Math.round(a.b + (b.b - a.b) * t);
+  return `rgb(${r}, ${g}, ${bCh})`;
+}
+
+function rgbaFromHex(color: string, alpha: number) {
+  const rgb = hexToRgb(color);
+  if (!rgb) return null;
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+}
+
 const progressBars = buildMiniBars(42);
 
 export function SongsMiniPlayerDock() {
@@ -27,13 +63,7 @@ export function SongsMiniPlayerDock() {
     currentTime,
     duration,
     seek,
-    restart,
-    pause,
     toggle,
-    previous,
-    next,
-    canPrevious,
-    canNext,
     openPlayerWindow
   } = useSongsPlayback();
 
@@ -41,6 +71,9 @@ export function SongsMiniPlayerDock() {
 
   const progress = duration > 0 ? currentTime / duration : 0;
   const playAccentStyle = playbackAccentButtonStyle(activeItem.cover);
+  const coverColorA = activeItem.cover?.colorA || "#d9f99d";
+  const coverColorB = activeItem.cover?.colorB || "#65a30d";
+  const mutedTrackBarsColor = rgbaFromHex(mixHexColors(coverColorA, coverColorB, 0.5) || coverColorB, 0.28) || "#b9c5b2";
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-[5.7rem] z-40 px-3 md:bottom-[5.8rem] md:px-4">
@@ -48,15 +81,12 @@ export function SongsMiniPlayerDock() {
         <div className="flex items-center gap-2 md:gap-3">
           <button
             type="button"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-full border md:h-12 md:w-12"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full border shadow-[0_8px_16px_rgba(61,84,46,0.18)] hover:brightness-95 md:h-10 md:w-10"
             style={playAccentStyle}
-            onClick={() => {
-              if (playing) pause();
-              else toggle(activeItem);
-            }}
+            onClick={() => toggle(activeItem)}
             aria-label={playing ? "Pause" : "Play"}
           >
-            <PlaybackIcon type={playing ? "pause" : "play"} className="h-4 w-4 md:h-5 md:w-5" />
+            <PlaybackIcon type={playing ? "pause" : "play"} className="h-4 w-4" />
           </button>
 
           <div
@@ -85,8 +115,11 @@ export function SongsMiniPlayerDock() {
                     return (
                       <span
                         key={`${idx}-${height}`}
-                        className={`block min-w-0 flex-1 rounded-full ${filled ? "bg-[#7abf52]" : "bg-[#b9c5b2]"}`}
-                        style={{ height: `${Math.max(18, Math.round(26 * height))}px` }}
+                        className="block min-w-0 flex-1 rounded-full"
+                        style={{
+                          height: `${Math.max(18, Math.round(26 * height))}px`,
+                          backgroundColor: filled ? mixHexColors(coverColorA, coverColorB, ratio) || coverColorB : mutedTrackBarsColor
+                        }}
                       />
                     );
                   })}
@@ -109,36 +142,6 @@ export function SongsMiniPlayerDock() {
               <span className="hidden w-9 text-right text-[11px] text-brand-muted sm:block">{formatClock(duration)}</span>
             </div>
           </div>
-
-          <div className="hidden items-center gap-2 sm:flex">
-            <button
-              type="button"
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-brand-border bg-white/85 text-brand-ink hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 md:h-10 md:w-10"
-              onClick={previous}
-              aria-label="Previous"
-              disabled={!canPrevious}
-            >
-              ‹
-            </button>
-            <button
-              type="button"
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-brand-border bg-white/85 text-brand-ink hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 md:h-10 md:w-10"
-              onClick={next}
-              aria-label="Next"
-              disabled={!canNext}
-            >
-              ›
-            </button>
-          </div>
-
-          <button
-            type="button"
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-brand-border bg-white/85 text-brand-ink hover:bg-white md:h-10 md:w-10"
-            onClick={restart}
-            aria-label="Restart"
-          >
-            ↺
-          </button>
 
           {activeItem.linkHref && (
             <Link href={activeItem.linkHref} className="hidden sm:block">

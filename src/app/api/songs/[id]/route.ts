@@ -68,10 +68,19 @@ export const PATCH = withApiHandler(async (request: Request, { params }: { param
 
   if (body.projectId) {
     const project = await prisma.project.findFirst({
-      where: { id: body.projectId, userId: user.id }
+      where: { id: body.projectId, userId: user.id },
+      include: { _count: { select: { tracks: true } } }
     });
     if (!project) {
       throw apiError(403, "Cannot use this project");
+    }
+    if (project.releaseKind === "SINGLE") {
+      const otherTracksCount = await prisma.track.count({
+        where: { projectId: project.id, id: { not: track.id } }
+      });
+      if (otherTracksCount >= 1) {
+        throw apiError(400, "Single project can contain only one track.");
+      }
     }
     if (body.folderId !== undefined && project.folderId !== (body.folderId ?? null)) {
       throw apiError(400, "projectId and folderId mismatch");
@@ -131,6 +140,13 @@ export const PATCH = withApiHandler(async (request: Request, { params }: { param
       await tx.project.update({
         where: { id: nextTrack.projectId },
         data: { folderId: resolvedFolderId }
+      });
+    }
+
+    if (nextTrack.projectId && nextTrack.project?.releaseKind === "SINGLE") {
+      await tx.project.update({
+        where: { id: nextTrack.projectId },
+        data: { title: nextTrack.title }
       });
     }
 

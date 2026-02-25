@@ -7,22 +7,44 @@ import { useRouter } from "next/navigation";
 
 import { MultiTrackRecorder } from "@/components/audio/multi-track-recorder";
 import { PlaybackIcon } from "@/components/songs/playback-icon";
+import { SongAnalysisBadges } from "@/components/songs/song-analysis-badges";
 import { useSongsPlayback, type SongsPlaybackItem } from "@/components/songs/songs-playback-provider";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
+import {
+  appendAudioAnalysisToFormData,
+  detectAudioAnalysisMvp,
+  type UploadAudioAnalysisMeta
+} from "@/lib/audio/upload-analysis-client";
+import { buildProjectCoverStyle } from "@/lib/project-cover-style";
 import { pickPreferredPlaybackDemo, playbackAccentButtonStyle } from "@/lib/songs-playback-helpers";
 import { saveNewSongFlowDraft, type NewSongFlowDraft } from "@/lib/songs/new-song-flow-draft";
+import { getProjectOpenHref } from "@/lib/songs-project-navigation";
 import {
   findIdeaStage,
   isDemoSongStage,
   isSelectableSongCreationStage,
   resolveVersionTypeByStage
 } from "@/lib/songs-version-stage-map";
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  Clock3,
+  FolderOpen,
+  MoreHorizontal,
+  Music2,
+  Pencil,
+  PlayCircle,
+  PlusCircle,
+  Sparkles,
+  Wand2
+} from "lucide-react";
 
-type DemoVersionType = "IDEA_TEXT" | "DEMO" | "ARRANGEMENT" | "NO_MIX" | "MIXED" | "MASTERED";
+type DemoVersionType = "IDEA_TEXT" | "DEMO" | "ARRANGEMENT" | "NO_MIX" | "MIXED" | "MASTERED" | "RELEASE";
 type AddTrackQuickAction = "convert" | "import" | "record";
 type ProjectSongFlowStep = "lyrics" | "stage" | "file-upload";
 type PathStage = { id: number; name: string };
@@ -33,6 +55,9 @@ type ProjectTrack = {
   createdAt: string;
   updatedAt: string;
   primaryDemoId?: string | null;
+  displayBpm?: number | null;
+  displayKeyRoot?: string | null;
+  displayKeyMode?: string | null;
   pathStage?: { id: number; name: string } | null;
   _count?: { demos: number };
   primaryDemo?: {
@@ -60,6 +85,8 @@ type ProjectDetail = {
   artistLabel?: string | null;
   folderId: string | null;
   updatedAt: string;
+  releaseKind: "SINGLE" | "ALBUM";
+  singleTrackId?: string | null;
   coverType: "GRADIENT" | "IMAGE";
   coverImageUrl?: string | null;
   coverPresetKey?: string | null;
@@ -75,6 +102,7 @@ type CoverPreset = {
   label: string;
   colorA: string;
   colorB: string;
+  releaseKind?: "SINGLE" | "ALBUM";
 };
 
 const COVER_PRESETS: CoverPreset[] = [
@@ -89,7 +117,9 @@ const COVER_PRESETS: CoverPreset[] = [
   { key: "violet-ink", label: "Violet", colorA: "#BFA7FF", colorB: "#3D2C8D" },
   { key: "teal-glow", label: "Teal", colorA: "#78F2E8", colorB: "#0B7285" },
   { key: "mono-cream", label: "Cream", colorA: "#F5F1E8", colorB: "#D8D3C8" },
-  { key: "lime-punch", label: "Lime", colorA: "#C8FF7A", colorB: "#2F9E44" }
+  { key: "lime-punch", label: "Lime", colorA: "#C8FF7A", colorB: "#2F9E44" },
+  { key: "album-aurora", label: "Album Aurora", colorA: "#86EFAC", colorB: "#1D4ED8", releaseKind: "ALBUM" },
+  { key: "album-sunset-grid", label: "Album Sunset", colorA: "#FDBA74", colorB: "#7C3AED", releaseKind: "ALBUM" }
 ];
 
 function formatClock(seconds: number) {
@@ -122,17 +152,14 @@ function formatPlaylistDuration(tracks: ProjectTrack[]) {
 }
 
 function coverStyle(project: ProjectDetail): React.CSSProperties {
-  if (project.coverType === "IMAGE" && project.coverImageUrl) {
-    return {
-      backgroundImage: `url(${project.coverImageUrl})`,
-      backgroundSize: "cover",
-      backgroundPosition: "center"
-    };
-  }
-
-  return {
-    background: `linear-gradient(145deg, ${project.coverColorA || "#d9f99d"}, ${project.coverColorB || "#65a30d"})`
-  };
+  return buildProjectCoverStyle({
+    releaseKind: project.releaseKind,
+    coverType: project.coverType,
+    coverImageUrl: project.coverImageUrl,
+    coverPresetKey: project.coverPresetKey,
+    coverColorA: project.coverColorA,
+    coverColorB: project.coverColorB
+  });
 }
 
 async function fetcher<T>(url: string): Promise<T> {
@@ -180,6 +207,8 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
   const [trackMenuBusyId, setTrackMenuBusyId] = useState("");
   const [createTrackError, setCreateTrackError] = useState("");
   const [showProjectSongFlowModal, setShowProjectSongFlowModal] = useState(false);
+  const [showEmptySingleTrackPrompt, setShowEmptySingleTrackPrompt] = useState(false);
+  const [emptySingleTrackPromptHandledProjectId, setEmptySingleTrackPromptHandledProjectId] = useState<string | null>(null);
   const [projectSongFlowStep, setProjectSongFlowStep] = useState<ProjectSongFlowStep>("lyrics");
   const [projectSongFlowDraft, setProjectSongFlowDraft] = useState<NewSongFlowDraft>({
     title: "",
@@ -193,6 +222,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
     createdAt: Date.now()
   });
   const [projectSongFlowFile, setProjectSongFlowFile] = useState<File | null>(null);
+  const [projectSongFlowFileAnalysis, setProjectSongFlowFileAnalysis] = useState<UploadAudioAnalysisMeta | null>(null);
   const [projectSongFlowSaving, setProjectSongFlowSaving] = useState(false);
   const [projectSongFlowError, setProjectSongFlowError] = useState("");
   const [selectedCoverPresetKey, setSelectedCoverPresetKey] = useState(COVER_PRESETS[0].key);
@@ -202,7 +232,9 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
   const [newTrackText, setNewTrackText] = useState("");
   const [newTrackComment, setNewTrackComment] = useState("");
   const [newTrackFile, setNewTrackFile] = useState<File | null>(null);
+  const [newTrackFileAnalysis, setNewTrackFileAnalysis] = useState<UploadAudioAnalysisMeta | null>(null);
   const [newTrackRecordedMix, setNewTrackRecordedMix] = useState<{ blob: Blob; durationSec: number; filename: string } | null>(null);
+  const [newTrackRecordedMixAnalysis, setNewTrackRecordedMixAnalysis] = useState<UploadAudioAnalysisMeta | null>(null);
   const [recorderResetKey, setRecorderResetKey] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -310,6 +342,24 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [showProjectSongFlowModal]);
 
+  useEffect(() => {
+    if (!project) return;
+    const trackCount = project._count?.tracks ?? project.tracks.length;
+    const isEmptySingle = project.releaseKind === "SINGLE" && trackCount === 0;
+
+    if (!isEmptySingle) {
+      setShowEmptySingleTrackPrompt(false);
+      if (emptySingleTrackPromptHandledProjectId === project.id) {
+        setEmptySingleTrackPromptHandledProjectId(null);
+      }
+      return;
+    }
+
+    if (emptySingleTrackPromptHandledProjectId !== project.id) {
+      setShowEmptySingleTrackPrompt(true);
+    }
+  }, [project, emptySingleTrackPromptHandledProjectId]);
+
   if (!project) {
     return <p className="text-sm text-brand-muted">Загрузка проекта...</p>;
   }
@@ -317,6 +367,11 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
   const totalTracks = project._count?.tracks ?? tracks.length;
   const playlistDuration = formatPlaylistDuration(tracks);
   const projectPlayAccentStyle = playbackAccentButtonStyle({ colorA: project.coverColorA, colorB: project.coverColorB });
+  const playableTracksCount = projectQueue.length;
+  const lastUpdatedLabel = formatTrackWhen(project.updatedAt);
+  const isSingleProject = project.releaseKind === "SINGLE";
+  const singleTrack = tracks.length === 1 ? tracks[0] : null;
+  const canAddTrackToProject = !isSingleProject || totalTracks < 1;
 
   function trackPlaybackItem(track: ProjectTrack) {
     const queueItem = projectQueue.find((item) => item.trackId === track.id);
@@ -352,6 +407,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
     setProjectSongFlowStep("lyrics");
     setProjectSongFlowDraft(createEmptyProjectSongFlowDraft(currentProject));
     setProjectSongFlowFile(null);
+    setProjectSongFlowFileAnalysis(null);
     setProjectSongFlowSaving(false);
     setProjectSongFlowError("");
     if (projectSongFlowFileInputRef.current) {
@@ -362,11 +418,16 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
   function openProjectSongFlowWizard() {
     const currentProject = project;
     if (!currentProject) return;
+    if (currentProject.releaseKind === "SINGLE" && (currentProject._count?.tracks ?? currentProject.tracks.length) >= 1) {
+      setProjectActionError("Single project can contain only one track. Switch to Album to add more.");
+      return;
+    }
     setShowAddTrackQuickActions(false);
     setShowProjectSongFlowModal(true);
     setProjectSongFlowStep("lyrics");
     setProjectSongFlowDraft(createEmptyProjectSongFlowDraft(currentProject));
     setProjectSongFlowFile(null);
+    setProjectSongFlowFileAnalysis(null);
     setProjectSongFlowSaving(false);
     setProjectSongFlowError("");
     if (projectSongFlowFileInputRef.current) {
@@ -376,6 +437,18 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
 
   function closeProjectSongFlowModal() {
     resetProjectSongFlowModal();
+  }
+
+  function dismissEmptySingleTrackPrompt() {
+    if (project) {
+      setEmptySingleTrackPromptHandledProjectId(project.id);
+    }
+    setShowEmptySingleTrackPrompt(false);
+  }
+
+  function handleEmptySingleTrackPromptAdd() {
+    dismissEmptySingleTrackPrompt();
+    openProjectSongFlowWizard();
   }
 
   async function saveProjectSongFlowTextOnly() {
@@ -453,12 +526,14 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
     const createdTrack = (await createTrackResponse.json()) as { id: string };
 
     const durationSec = await getAudioDurationSeconds(projectSongFlowFile);
+    const analysis = await detectAudioAnalysisMvp(projectSongFlowFile);
     const formData = new FormData();
     formData.append("file", projectSongFlowFile, projectSongFlowFile.name);
     formData.append("trackId", createdTrack.id);
     formData.append("durationSec", String(durationSec));
     formData.append("versionType", versionType);
     formData.append("noteText", "");
+    appendAudioAnalysisToFormData(formData, analysis);
 
     const uploadResponse = await apiFetch("/api/audio-clips", { method: "POST", body: formData });
     if (!uploadResponse.ok) {
@@ -493,16 +568,6 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
     } finally {
       setProjectSongFlowSaving(false);
     }
-  }
-
-  function handleProjectSongFlowSkipLyrics() {
-    if (!projectSongFlowDraft.title.trim()) {
-      setProjectSongFlowError("Укажи название песни.");
-      return;
-    }
-    setProjectSongFlowDraft((prev) => ({ ...prev, lyricsWasSkipped: true, branch: null }));
-    setProjectSongFlowStep("stage");
-    setProjectSongFlowError("");
   }
 
   function handleProjectSongFlowContinueWithLyrics() {
@@ -572,7 +637,9 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
     setNewTrackText("");
     setNewTrackComment("");
     setNewTrackFile(null);
+    setNewTrackFileAnalysis(null);
     setNewTrackRecordedMix(null);
+    setNewTrackRecordedMixAnalysis(null);
     setCreateTrackError("");
     setRecorderResetKey((prev) => prev + 1);
     if (fileInputRef.current) {
@@ -730,12 +797,14 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
           return;
         }
 
+        const analysis = await detectAudioAnalysisMvp(fileToUpload);
         const formData = new FormData();
         formData.append("file", fileToUpload, filename);
         formData.append("trackId", createdTrack.id);
         formData.append("durationSec", String(durationSec));
         formData.append("versionType", newTrackVersionType);
         formData.append("noteText", newTrackComment.trim());
+        appendAudioAnalysisToFormData(formData, analysis);
 
         const uploadResponse = await apiFetch("/api/audio-clips", { method: "POST", body: formData });
         if (!uploadResponse.ok) {
@@ -854,6 +923,30 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
     }
   }
 
+  async function setProjectReleaseKind(nextKind: "SINGLE" | "ALBUM") {
+    const currentProject = project;
+    if (!currentProject || currentProject.releaseKind === nextKind) return;
+    setSavingProjectMeta(true);
+    setProjectActionError("");
+    setShowProjectMenu(false);
+    try {
+      const response = await apiFetch(`/api/projects/${currentProject.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ releaseKind: nextKind })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Не удалось изменить тип проекта.");
+      }
+      await refetch();
+    } catch (error) {
+      setProjectActionError(error instanceof Error ? error.message : "Не удалось изменить тип проекта.");
+    } finally {
+      setSavingProjectMeta(false);
+    }
+  }
+
   async function deleteTrackFromProject(track: ProjectTrack) {
     const confirmed = window.confirm(`Удалить трек «${track.title}» вместе со всеми версиями?`);
     if (!confirmed) return;
@@ -879,6 +972,10 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
     const currentProject = project;
     if (!currentProject) {
       setProjectActionError("Проект не загружен.");
+      return;
+    }
+    if (currentProject.releaseKind === "SINGLE") {
+      setMenuTrackId("");
       return;
     }
     if (tracks.length < 2) {
@@ -929,56 +1026,85 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
   return (
     <div className="pb-36">
       <div className="mx-auto w-full max-w-5xl px-4 py-5 md:px-6">
-        <div className="min-h-[calc(100vh-9rem)] overflow-hidden rounded-[30px] border border-brand-border bg-gradient-to-br from-[#edf4e4] via-[#e8f0de] to-[#e2ead7] px-4 py-5 text-brand-ink shadow-[0_20px_45px_rgba(61,84,46,0.14)] md:px-5">
-        <div className="mb-5 flex items-center justify-between gap-3">
-          <Link href="/songs">
-            <Button variant="secondary" className="border-brand-border bg-white/85 text-brand-ink hover:bg-white">
-              Назад
-            </Button>
-          </Link>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              className="border-brand-border bg-white/85 text-brand-ink hover:bg-white"
-              onClick={() => refetch()}
-            >
-              Обновить
-            </Button>
-            <div className="relative">
+        <div className="relative min-h-[calc(100vh-9rem)] overflow-visible rounded-[30px] border border-brand-border bg-gradient-to-br from-[#edf4e4] via-[#e8f0de] to-[#e2ead7] px-4 py-5 text-brand-ink shadow-[0_20px_45px_rgba(61,84,46,0.14)] md:px-5">
+          <div className="pointer-events-none absolute inset-0 opacity-90">
+            <div className="absolute -right-12 top-8 h-44 w-44 rounded-full bg-[#e8f27a]/45 blur-3xl" />
+            <div className="absolute left-[-2rem] top-24 h-40 w-40 rounded-full bg-white/35 blur-2xl" />
+            <div className="absolute bottom-[-2rem] right-20 h-36 w-36 rounded-full bg-[#9fc7b3]/35 blur-3xl" />
+            <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.35)_0%,rgba(255,255,255,0)_34%,rgba(90,123,75,0.07)_100%)]" />
+          </div>
+
+          <div className="relative mb-5 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Link href="/songs">
+                <Button
+                  variant="secondary"
+                  className="h-10 rounded-xl border-brand-border bg-white/90 px-3 text-brand-ink shadow-sm hover:bg-white"
+                >
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  Назад
+                </Button>
+              </Link>
+              <Badge className="hidden items-center gap-1.5 border-[#cbdab8] bg-white/75 text-[#4b6440] sm:inline-flex">
+                <Sparkles className="h-3.5 w-3.5" />
+                {isSingleProject ? "Single Page" : "Project Page"}
+              </Badge>
+            </div>
+
+            <div className="relative flex items-center gap-2">
               <Button
                 variant="secondary"
-                className="border-brand-border bg-white/85 px-3 text-brand-ink hover:bg-white"
+                className="h-10 w-10 rounded-xl border-brand-border bg-white/90 p-0 text-brand-ink shadow-sm hover:bg-white"
                 onClick={(event) => {
                   event.stopPropagation();
                   setShowProjectMenu((prev) => !prev);
                 }}
                 disabled={savingProjectMeta}
+                aria-label="Меню проекта"
+                title="Меню проекта"
               >
-                •••
+                <MoreHorizontal className="h-4 w-4" />
               </Button>
               {showProjectMenu && (
                 <div
-                  className="absolute right-0 top-12 z-20 min-w-[220px] rounded-2xl border border-brand-border bg-[#f7fbf2] p-2 shadow-[0_20px_40px_rgba(61,84,46,0.14)]"
+                  className="absolute right-0 top-11 z-20 min-w-[240px] rounded-2xl border border-brand-border bg-[#f7fbf2]/95 p-2 shadow-[0_20px_40px_rgba(61,84,46,0.14)] backdrop-blur"
                   onClick={(event) => event.stopPropagation()}
                 >
                   <button
                     type="button"
-                    className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
                     onClick={renameProject}
                   >
-                    Rename project
+                    <Pencil className="h-4 w-4 text-brand-muted" />
+                    <span>Rename project</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                    onClick={openCoverPicker}
+                  >
+                    <Wand2 className="h-4 w-4 text-brand-muted" />
+                    <span>Change cover art</span>
+                  </button>
+                  <div className="my-1 h-px bg-black/5" />
+                  <button
+                    type="button"
+                    className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                    onClick={() => void setProjectReleaseKind("SINGLE")}
+                  >
+                    Mark as Single
                   </button>
                   <button
                     type="button"
                     className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
-                    onClick={openCoverPicker}
+                    onClick={() => void setProjectReleaseKind("ALBUM")}
                   >
-                    Change cover art
+                    Mark as Album
                   </button>
-                  <div className="my-1 h-px bg-white/10" />
+                  <div className="my-1 h-px bg-black/5" />
                   <button
                     type="button"
-                    className="block w-full rounded-xl px-3 py-2 text-left text-sm text-red-700 hover:bg-black/5"
+                    className="block w-full rounded-xl px-3 py-2 text-left text-sm text-red-700 hover:bg-[#ffe7e1]"
                     onClick={deleteProject}
                   >
                     Delete project
@@ -987,68 +1113,171 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
               )}
             </div>
           </div>
-        </div>
 
-        {projectActionError && (
-          <div className="mb-4 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-            {projectActionError}
-          </div>
-        )}
+          {projectActionError && (
+            <div className="relative mb-4 rounded-2xl border border-red-300/70 bg-[#fff2ef]/90 px-3 py-2 text-sm text-[#a4372a] shadow-sm">
+              {projectActionError}
+            </div>
+          )}
 
-        <section className="mb-6 rounded-[28px] border border-brand-border bg-white/85 p-4 shadow-sm md:p-5">
-          <div className="grid gap-5 md:grid-cols-[minmax(0,360px)_1fr] md:items-end">
-            <button
-              type="button"
-              className="relative aspect-square overflow-hidden rounded-3xl text-left"
-              style={coverStyle(project)}
-              onClick={openCoverPicker}
-              aria-label="Change project cover"
-            >
-              <div className="absolute inset-0 bg-gradient-to-br from-white/10 via-transparent to-black/15" />
-              <div className="absolute -right-8 top-8 h-32 w-32 rounded-full bg-white/20 blur-2xl" />
-              <div className="absolute bottom-3 left-3 rounded-xl border border-white/15 bg-black/25 px-3 py-1 text-xs text-white/90 backdrop-blur">
-                Change cover
-              </div>
-            </button>
+          <section className="relative isolate mb-6 overflow-hidden rounded-[28px] border border-brand-border bg-white p-4 shadow-[0_14px_32px_rgba(61,84,46,0.1)] md:p-5">
+            <div className="pointer-events-none absolute inset-0 z-0">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(213,234,164,0.24),transparent_42%),radial-gradient(circle_at_92%_8%,rgba(217,249,157,0.16),transparent_36%)]" />
+              <div className="absolute right-6 top-4 h-24 w-24 rounded-full bg-[#d9f99d]/30 blur-2xl" />
+            </div>
 
-            <div className="space-y-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Project</p>
-                <h1 className="text-3xl font-semibold tracking-tight text-brand-ink md:text-4xl">{project.title}</h1>
-                <p className="mt-1 text-sm text-brand-muted">
-                  {project.artistLabel || "ART SAFE"} • {totalTracks} track{totalTracks === 1 ? "" : "s"} • {playlistDuration}
-                </p>
-                {project.folder?.title && <p className="mt-1 text-xs text-brand-muted">Папка: {project.folder.title}</p>}
+            <div className="relative z-10 grid gap-5 md:grid-cols-[minmax(0,340px)_1fr]">
+              <div className="relative aspect-square overflow-visible rounded-3xl">
+                <div className="group relative h-full w-full overflow-hidden rounded-3xl border border-black/10 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.2),0_18px_34px_rgba(61,84,46,0.16)]">
+                  <div className="absolute inset-0" style={coverStyle(project)} />
+                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(255,255,255,0.18),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.12),transparent_45%,rgba(0,0,0,0.14))]" />
+                  <div className="pointer-events-none absolute -right-8 top-8 h-32 w-32 rounded-full bg-white/25 blur-2xl" />
+                  <button
+                    type="button"
+                    className="absolute inset-0 appearance-none rounded-3xl bg-transparent p-0"
+                    onClick={openCoverPicker}
+                    aria-label="Change project cover"
+                  />
+                </div>
+
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  className="border hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
-                  style={projectPlayAccentStyle}
-                  onClick={() => playProjectQueue(undefined, false)}
-                  disabled={!projectQueue.length}
-                >
-                  <span className="inline-flex items-center gap-2">
-                    <PlaybackIcon type="play" className="h-4 w-4" />
-                    <span>Play project</span>
-                  </span>
-                </Button>
-                <Button
-                  variant="secondary"
-                  className="border-brand-border bg-white text-brand-ink hover:bg-white"
-                  onClick={openProjectSongFlowWizard}
-                >
-                  + Add tracks
-                </Button>
+              <div className="space-y-4">
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge className="border-[#cbdab8] bg-[#f5faeb] text-[#4b6440]">
+                      <Sparkles className="mr-1 h-3.5 w-3.5" />
+                      {isSingleProject ? "Single" : "Album"}
+                    </Badge>
+                    <Badge className="border-brand-border bg-white text-brand-muted">
+                      <Clock3 className="mr-1 h-3.5 w-3.5" />
+                      Обновлено: {lastUpdatedLabel}
+                    </Badge>
+                    {project.folder?.title && (
+                      <Badge className="border-brand-border bg-white text-brand-muted">
+                        <FolderOpen className="mr-1 h-3.5 w-3.5" />
+                        {project.folder.title}
+                      </Badge>
+                    )}
+                  </div>
+
+                  <div>
+                    <h1 className="text-3xl font-semibold tracking-tight text-brand-ink md:text-4xl">{project.title}</h1>
+                    <p className="mt-1 text-sm text-brand-muted">
+                      {project.artistLabel || "ART SAFE"} • {totalTracks} track{totalTracks === 1 ? "" : "s"} • {playlistDuration}
+                    </p>
+                    {isSingleProject && (
+                      <p className="mt-1 text-xs text-brand-muted">
+                        Single-mode: карточка откроет версии напрямую после появления одного трека.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-2xl border border-brand-border bg-white px-3 py-3 shadow-sm">
+                    <p className="text-[11px] uppercase tracking-[0.14em] text-brand-muted">Tracks</p>
+                    <p className="mt-1 text-2xl font-semibold tracking-tight text-brand-ink">{totalTracks}</p>
+                    <p className="text-xs text-brand-muted">в проекте</p>
+                  </div>
+                  <div className="rounded-2xl border border-brand-border bg-white px-3 py-3 shadow-sm">
+                    <p className="text-[11px] uppercase tracking-[0.14em] text-brand-muted">Playable</p>
+                    <p className="mt-1 text-2xl font-semibold tracking-tight text-brand-ink">{playableTracksCount}</p>
+                    <p className="text-xs text-brand-muted">с аудио-версией</p>
+                  </div>
+                  <div className="rounded-2xl border border-brand-border bg-white px-3 py-3 shadow-sm">
+                    <p className="text-[11px] uppercase tracking-[0.14em] text-brand-muted">Duration</p>
+                    <p className="mt-1 text-2xl font-semibold tracking-tight text-brand-ink">{playlistDuration}</p>
+                    <p className="text-xs text-brand-muted">общая длина</p>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-brand-border bg-white p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]">
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      className="rounded-xl border hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+                      style={projectPlayAccentStyle}
+                      onClick={() => playProjectQueue(undefined, false)}
+                      disabled={!projectQueue.length}
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <PlayCircle className="h-4 w-4" />
+                        <span>{isSingleProject ? "Play single" : "Play project"}</span>
+                      </span>
+                    </Button>
+                    {isSingleProject && singleTrack && (
+                      <Link
+                        href={getProjectOpenHref({
+                          id: project.id,
+                          releaseKind: project.releaseKind,
+                          singleTrackId: singleTrack.id
+                        })}
+                      >
+                        <Button
+                          variant="secondary"
+                          className="rounded-xl border-brand-border bg-white text-brand-ink hover:bg-white"
+                        >
+                          <ArrowUpRight className="mr-2 h-4 w-4" />
+                          Open Versions
+                        </Button>
+                      </Link>
+                    )}
+                    <Button
+                      variant="secondary"
+                      className="rounded-xl border-brand-border bg-white text-brand-ink hover:bg-white"
+                      onClick={openProjectSongFlowWizard}
+                      disabled={!canAddTrackToProject}
+                    >
+                      <PlusCircle className="mr-2 h-4 w-4" />
+                      {isSingleProject ? "Add first track" : "Add tracks"}
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-xs text-brand-muted">
+                    {isSingleProject
+                      ? canAddTrackToProject
+                        ? "Добавь один трек в single, после чего карточка будет открывать страницу версий."
+                        : "Single уже содержит трек. Для второго трека переключи тип проекта на Album."
+                      : "Быстрые действия по проекту и добавлению новых треков в PATH-флоу."}
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <section className="rounded-[28px] border border-brand-border bg-white/85 p-3 md:p-4">
-          <div className="mb-2 px-2 text-xs uppercase tracking-[0.16em] text-brand-muted">Playlist</div>
-          <div className="space-y-2">
-            {tracks.map((track, index) => {
+          <section className="relative overflow-hidden rounded-[28px] border border-brand-border bg-white/85 p-3 shadow-[0_14px_32px_rgba(61,84,46,0.08)] md:p-4">
+            <div className="pointer-events-none absolute inset-0">
+              <div className="absolute left-4 top-4 h-16 w-32 rounded-full bg-[#dff0c6]/50 blur-2xl" />
+              <div className="absolute inset-x-0 top-0 h-14 bg-[linear-gradient(90deg,rgba(255,255,255,0.45),rgba(255,255,255,0))]" />
+            </div>
+
+            <div className="relative mb-3 rounded-2xl border border-brand-border bg-white/75 px-3 py-3 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">{isSingleProject ? "Single Track" : "Playlist"}</p>
+                  <h2 className="text-lg font-semibold tracking-tight text-brand-ink">
+                    {isSingleProject ? "Трек сингла" : "Треки проекта"}
+                  </h2>
+                  <p className="text-sm text-brand-muted">
+                    {isSingleProject
+                      ? "Открой версии единственного трека и работай с single-обложкой."
+                      : "Открывай версии, управляй порядком и слушай проект как плейлист."}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge className="border-brand-border bg-white/90 text-brand-muted">
+                    <Music2 className="mr-1 h-3.5 w-3.5" />
+                    {totalTracks} tracks
+                  </Badge>
+                  <Badge className="border-brand-border bg-white/90 text-brand-muted">
+                    <PlayCircle className="mr-1 h-3.5 w-3.5" />
+                    {playableTracksCount} playable
+                  </Badge>
+                </div>
+              </div>
+            </div>
+
+            <div className="relative space-y-2">
+              {tracks.map((track, index) => {
               const playbackPayload = trackPlaybackItem(track);
               const playbackDemo = playbackPayload?.demo ?? null;
               const isCurrent = playbackDemo ? playback.isActive(playbackDemo.id) : false;
@@ -1058,27 +1287,34 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
               return (
                 <div
                   key={track.id}
-                  className={`relative flex items-center gap-3 rounded-2xl border px-3 py-3 transition ${
+                  className={`group relative flex items-center gap-3 rounded-2xl border px-3 py-3 shadow-sm transition ${
                     isCurrent
-                      ? "border-[#9fc7b3] bg-[#e7f2eb]"
-                      : "border-brand-border bg-white/80 hover:bg-white"
+                      ? "border-[#9fc7b3] bg-[#e7f2eb] shadow-[0_10px_24px_rgba(77,126,101,0.14)]"
+                      : "border-brand-border bg-white/80 hover:border-[#c5d8b3] hover:bg-white"
                   }`}
                   onClick={() => playbackDemo && handleTrackRowTap(track)}
                 >
-                  <div className="w-8 shrink-0 text-center text-sm text-brand-muted">{index + 1}</div>
+                  <div className="absolute inset-y-2 left-1 w-1 rounded-full bg-transparent transition group-hover:bg-[#dcebc5]" />
+                  <div
+                    className={`w-9 shrink-0 text-center text-sm font-medium ${
+                      isCurrent ? "text-[#2e6855]" : "text-brand-muted"
+                    }`}
+                  >
+                    {String(index + 1).padStart(2, "0")}
+                  </div>
 
                   <button
                     type="button"
-                    className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl border text-sm ${
+                    className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border text-sm shadow-sm ${
                       playbackDemo
                         ? "hover:brightness-95"
                         : "cursor-not-allowed border-brand-border bg-white/70 text-brand-muted/60"
                     }`}
                     style={playbackDemo ? projectPlayAccentStyle : undefined}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        if (playbackDemo) handleTrackPlayButton(track);
-                      }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (playbackDemo) handleTrackPlayButton(track);
+                    }}
                     disabled={!playbackDemo}
                     aria-label={playbackDemo ? "Play track" : "No playable version"}
                   >
@@ -1091,29 +1327,43 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                   </button>
 
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <p className="truncate text-base font-semibold text-brand-ink">{track.title}</p>
                       {isPrimaryPlayback && (
                         <span className="shrink-0 rounded-full border border-[#a4cbb8] bg-[#e8f3ec] px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-[#2e6855]">
                           primary
                         </span>
                       )}
+                      {track.pathStage?.name && (
+                        <Badge className="h-5 border-brand-border bg-white/90 px-2 py-0 text-[10px] uppercase tracking-[0.08em] text-brand-muted">
+                          {track.pathStage.name}
+                        </Badge>
+                      )}
                     </div>
                     <p className="truncate text-sm text-brand-muted">
                       {playbackDemo
-                        ? `${track.pathStage?.name ?? "Без статуса"} • ${formatTrackWhen(playbackDemo.createdAt)} • ${formatClock(
-                            playbackDemo.duration
-                          )}`
+                        ? `${formatTrackWhen(playbackDemo.createdAt)} • ${formatClock(playbackDemo.duration)}`
                         : "Нет аудио-версий (пока только текст/черновик)"}
                     </p>
+                    <SongAnalysisBadges
+                      bpm={track.displayBpm}
+                      keyRoot={track.displayKeyRoot}
+                      keyMode={track.displayKeyMode}
+                      className="mt-1"
+                      compact
+                    />
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <div className="hidden text-xs text-brand-muted sm:block">{track._count?.demos ?? 0} верс.</div>
+                    <div className="hidden sm:block">
+                      <Badge className="border-brand-border bg-white/90 text-brand-muted">
+                        {track._count?.demos ?? 0} верс.
+                      </Badge>
+                    </div>
                     <div className="relative">
                       <button
                         type="button"
-                        className="grid h-9 w-9 place-items-center rounded-xl border border-brand-border bg-white text-brand-ink hover:bg-white disabled:cursor-wait disabled:opacity-60"
+                        className="grid h-9 w-9 place-items-center rounded-xl border border-brand-border bg-white text-brand-ink shadow-sm hover:bg-white disabled:cursor-wait disabled:opacity-60"
                         onClick={(event) => {
                           event.stopPropagation();
                           setMenuTrackId((prev) => (prev === track.id ? "" : track.id));
@@ -1121,19 +1371,20 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                         aria-label="Track actions"
                         disabled={isTrackMenuBusy}
                       >
-                        •••
+                        <MoreHorizontal className="h-4 w-4" />
                       </button>
                       {menuTrackId === track.id && (
                         <div
-                          className="absolute right-0 top-11 z-10 min-w-[180px] rounded-2xl border border-brand-border bg-[#f7fbf2] p-2 shadow-[0_20px_40px_rgba(61,84,46,0.14)]"
+                          className="absolute bottom-11 right-0 z-40 min-w-[190px] rounded-2xl border border-brand-border bg-[#f7fbf2]/95 p-2 shadow-[0_20px_40px_rgba(61,84,46,0.14)] backdrop-blur"
                           onClick={(event) => event.stopPropagation()}
                         >
                           <Link
                             href={`/songs/${track.id}`}
-                            className="block rounded-xl px-3 py-2 text-sm text-brand-ink hover:bg-black/5"
+                            className="flex items-center justify-between rounded-xl px-3 py-2 text-sm text-brand-ink hover:bg-black/5"
                             onClick={() => setMenuTrackId("")}
                           >
-                            Версии
+                            <span>Версии</span>
+                            <ArrowUpRight className="h-4 w-4 text-brand-muted" />
                           </Link>
                           <Link
                             href={`/songs/${track.id}?edit=1&showLyrics=1`}
@@ -1162,8 +1413,9 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                           )}
                           <button
                             type="button"
-                            className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                            className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5 disabled:cursor-not-allowed disabled:text-brand-muted/60"
                             onClick={() => void moveTrackInPlaylist(track, index)}
+                            disabled={isSingleProject}
                           >
                             Move
                           </button>
@@ -1184,81 +1436,135 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
             })}
 
             {!tracks.length && (
-              <div className="rounded-2xl border border-dashed border-brand-border bg-white/70 px-4 py-6 text-center text-sm text-brand-muted">
-                В проекте пока нет треков.
+              <div className="rounded-2xl border border-dashed border-brand-border bg-white/75 px-4 py-8 text-center shadow-sm">
+                <div className="mx-auto mb-3 grid h-11 w-11 place-items-center rounded-2xl border border-brand-border bg-white text-brand-muted">
+                  <Music2 className="h-5 w-5" />
+                </div>
+                <p className="text-sm font-medium text-brand-ink">В проекте пока нет треков</p>
+                <p className="mt-1 text-xs text-brand-muted">
+                  {isSingleProject
+                    ? "Добавь первый трек, чтобы single начал открываться сразу в версии."
+                    : "Добавь первый трек через PATH flow или быстрый импорт."}
+                </p>
               </div>
             )}
-          </div>
-        </section>
+            </div>
+          </section>
         </div>
       </div>
 
       {showCoverPicker && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-12 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 p-4 pt-10 backdrop-blur-sm md:pt-14"
           onClick={() => setShowCoverPicker(false)}
         >
           <div
-            className="w-full max-w-4xl rounded-[28px] border border-white/10 bg-[#111511] p-4 text-white shadow-[0_24px_60px_rgba(0,0,0,0.45)] md:p-5"
+            className="w-full max-w-4xl rounded-[28px] border border-brand-border bg-[#f7fbf2] p-4 text-brand-ink shadow-[0_24px_60px_rgba(61,84,46,0.22)] md:p-5"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.16em] text-white/45">Cover</p>
-                <h2 className="text-3xl font-semibold tracking-tight">Обложка проекта</h2>
-                <p className="text-sm text-white/55">Пока делаем быстрый выбор из пресетов, как в untitled.</p>
+                <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Cover</p>
+                <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">Обложка проекта</h2>
+                <p className="text-sm text-brand-muted">Быстрый выбор обложки из пресетов проекта.</p>
               </div>
               <div className="flex items-center gap-2">
                 <Button
                   variant="secondary"
-                  className="border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  className="border-brand-border bg-white/85 text-brand-ink hover:bg-white"
                   onClick={() => setShowCoverPicker(false)}
                 >
-                  Close
+                  Закрыть
                 </Button>
                 <Button disabled={savingProjectMeta} onClick={saveCoverPreset}>
-                  {savingProjectMeta ? "Сохраняем..." : "Done"}
+                  {savingProjectMeta ? "Сохраняем..." : "Готово"}
                 </Button>
               </div>
             </div>
 
-            <div className="mb-5 flex justify-center">
+            <div className="mb-5 rounded-2xl border border-brand-border bg-white/70 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] md:p-4">
               {(() => {
                 const selectedPreset = COVER_PRESETS.find((preset) => preset.key === selectedCoverPresetKey) ?? COVER_PRESETS[0];
                 return (
-                  <div className="w-full max-w-xl">
+                  <div className="mx-auto w-full max-w-xl">
                     <div
-                      className="aspect-[1.15] rounded-3xl border border-white/10 shadow-[0_14px_40px_rgba(0,0,0,0.25)]"
-                      style={{
-                        background: `linear-gradient(145deg, ${selectedPreset.colorA}, ${selectedPreset.colorB})`
-                      }}
+                      className="aspect-[1.15] rounded-3xl border border-black/10 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.35),0_14px_35px_rgba(61,84,46,0.18)]"
+                      style={buildProjectCoverStyle({
+                        releaseKind: selectedPreset.releaseKind ?? project.releaseKind,
+                        coverType: "GRADIENT",
+                        coverPresetKey: selectedPreset.key,
+                        coverColorA: selectedPreset.colorA,
+                        coverColorB: selectedPreset.colorB
+                      })}
                     />
-                    <p className="mt-2 text-center text-sm text-white/55">{selectedPreset.label}</p>
+                    <p className="mt-3 text-center text-sm font-medium text-brand-ink">{selectedPreset.label}</p>
                   </div>
                 );
               })()}
             </div>
 
-            <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6">
+            <div className="grid max-h-[42vh] grid-cols-2 gap-3 overflow-y-auto rounded-2xl border border-brand-border bg-white/55 p-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
               {COVER_PRESETS.map((preset) => {
                 const selected = preset.key === selectedCoverPresetKey;
                 return (
                   <button
                     key={preset.key}
                     type="button"
+                    aria-pressed={selected}
                     className={`group rounded-2xl border p-2 text-left transition ${
-                      selected ? "border-white/40 bg-white/10" : "border-white/10 bg-white/[0.03] hover:border-white/20"
+                      selected
+                        ? "border-[#9fba7d] bg-[#eef7df] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.65)]"
+                        : "border-brand-border bg-white/80 hover:border-[#ccdaba] hover:bg-white"
                     }`}
                     onClick={() => setSelectedCoverPresetKey(preset.key)}
                   >
                     <div
-                      className="mb-2 aspect-square rounded-xl"
-                      style={{ background: `linear-gradient(145deg, ${preset.colorA}, ${preset.colorB})` }}
+                      className="mb-2 aspect-square rounded-xl border border-black/5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.3)]"
+                      style={buildProjectCoverStyle({
+                        releaseKind: preset.releaseKind ?? project.releaseKind,
+                        coverType: "GRADIENT",
+                        coverPresetKey: preset.key,
+                        coverColorA: preset.colorA,
+                        coverColorB: preset.colorB
+                      })}
                     />
-                    <p className="truncate text-xs text-white/80">{preset.label}</p>
+                    <p className={`truncate text-xs ${selected ? "font-medium text-brand-ink" : "text-brand-muted group-hover:text-brand-ink"}`}>
+                      {preset.label}
+                    </p>
                   </button>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEmptySingleTrackPrompt && isSingleProject && !tracks.length && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm"
+          onClick={dismissEmptySingleTrackPrompt}
+        >
+          <div
+            className="w-full max-w-md rounded-[24px] border border-brand-border bg-[#f7fbf2] p-5 text-brand-ink shadow-[0_24px_60px_rgba(61,84,46,0.22)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Single</p>
+            <h2 className="mt-1 text-2xl font-semibold tracking-tight">У сингла пока нет трека</h2>
+            <p className="mt-2 text-sm text-brand-muted">
+              Добавьте песню, чтобы single открывался сразу в версии трека.
+            </p>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                className="border-brand-border bg-white text-brand-ink hover:bg-white"
+                onClick={dismissEmptySingleTrackPrompt}
+              >
+                Позже
+              </Button>
+              <Button type="button" onClick={handleEmptySingleTrackPromptAdd}>
+                Add
+              </Button>
             </div>
           </div>
         </div>
@@ -1334,15 +1640,6 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="border-brand-border bg-white text-brand-ink hover:bg-white"
-                      onClick={handleProjectSongFlowSkipLyrics}
-                      disabled={projectSongFlowSaving}
-                    >
-                      Пропустить этот шаг
-                    </Button>
                     <Button type="button" onClick={handleProjectSongFlowContinueWithLyrics} disabled={projectSongFlowSaving}>
                       Далее
                     </Button>
@@ -1361,9 +1658,6 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
 
               {projectSongFlowStep === "stage" && (
                 <div className="space-y-3">
-                  <div className="rounded-xl border border-brand-border bg-white/80 px-3 py-2 text-sm text-brand-muted">
-                    Выбери этап. «Идея» скрыта здесь и доступна через «Сохранить только текст».
-                  </div>
                   <Select
                     value={projectSongFlowDraft.selectedStageId ? String(projectSongFlowDraft.selectedStageId) : "NONE"}
                     onChange={(event) => {
@@ -1440,14 +1734,23 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                     type="file"
                     accept="audio/*"
                     className="hidden"
-                    onChange={(event) => {
-                      setProjectSongFlowFile(event.target.files?.[0] ?? null);
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0] ?? null;
+                      setProjectSongFlowFile(file);
                       setProjectSongFlowError("");
+                      setProjectSongFlowFileAnalysis(file ? await detectAudioAnalysisMvp(file) : null);
                     }}
                   />
                   {projectSongFlowFile ? (
                     <div className="rounded-xl border border-brand-border bg-white/75 px-3 py-2 text-xs text-brand-muted">
-                      Файл: {projectSongFlowFile.name}
+                      <p>Файл: {projectSongFlowFile.name}</p>
+                      <SongAnalysisBadges
+                        bpm={projectSongFlowFileAnalysis?.bpm}
+                        keyRoot={projectSongFlowFileAnalysis?.keyRoot}
+                        keyMode={projectSongFlowFileAnalysis?.keyMode}
+                        className="mt-1"
+                        compact
+                      />
                     </div>
                   ) : (
                     <div className="rounded-xl border border-dashed border-brand-border bg-white/70 px-3 py-3 text-sm text-brand-muted">
@@ -1509,6 +1812,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                 <option value="NO_MIX">Запись без сведения</option>
                 <option value="MIXED">С сведением</option>
                 <option value="MASTERED">С мастерингом</option>
+                <option value="RELEASE">Релиз</option>
                 <option value="IDEA_TEXT">Идея (текст)</option>
               </Select>
 
@@ -1539,12 +1843,23 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                 type="file"
                 accept="audio/*"
                 className="hidden"
-                onChange={(event) => setNewTrackFile(event.target.files?.[0] ?? null)}
+                onChange={async (event) => {
+                  const file = event.target.files?.[0] ?? null;
+                  setNewTrackFile(file);
+                  setNewTrackFileAnalysis(file ? await detectAudioAnalysisMvp(file) : null);
+                }}
               />
 
               {newTrackVersionType !== "IDEA_TEXT" && newTrackMode === "upload" && newTrackFile && (
                 <div className="rounded-xl border border-brand-border bg-white/75 px-3 py-2 text-xs text-brand-muted">
-                  Файл: {newTrackFile.name}
+                  <p>Файл: {newTrackFile.name}</p>
+                  <SongAnalysisBadges
+                    bpm={newTrackFileAnalysis?.bpm}
+                    keyRoot={newTrackFileAnalysis?.keyRoot}
+                    keyMode={newTrackFileAnalysis?.keyMode}
+                    className="mt-1"
+                    compact
+                  />
                 </div>
               )}
 
@@ -1553,8 +1868,28 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                   <MultiTrackRecorder
                     resetKey={recorderResetKey}
                     onError={setCreateTrackError}
-                    onReset={() => setNewTrackRecordedMix(null)}
-                    onReady={(payload) => setNewTrackRecordedMix(payload)}
+                    onReset={() => {
+                      setNewTrackRecordedMix(null);
+                      setNewTrackRecordedMixAnalysis(null);
+                    }}
+                    onReady={(payload) => {
+                      setNewTrackRecordedMix(payload);
+                      void detectAudioAnalysisMvp(payload.blob)
+                        .then(setNewTrackRecordedMixAnalysis)
+                        .catch(() => setNewTrackRecordedMixAnalysis(null));
+                    }}
+                  />
+                </div>
+              )}
+              {newTrackVersionType !== "IDEA_TEXT" && newTrackMode === "record" && newTrackRecordedMix && (
+                <div className="rounded-xl border border-brand-border bg-white/75 px-3 py-2 text-xs text-brand-muted">
+                  <p>Сведённый микс: {newTrackRecordedMix.filename}</p>
+                  <SongAnalysisBadges
+                    bpm={newTrackRecordedMixAnalysis?.bpm}
+                    keyRoot={newTrackRecordedMixAnalysis?.keyRoot}
+                    keyMode={newTrackRecordedMixAnalysis?.keyMode}
+                    className="mt-1"
+                    compact
                   />
                 </div>
               )}

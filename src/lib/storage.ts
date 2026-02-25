@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import path from "path";
 import { promises as fs } from "fs";
 
-export const MAX_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024;
+export const MAX_AUDIO_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
 export const ALLOWED_AUDIO_MIME_TYPES = new Set([
   "audio/mpeg",
   "audio/mp3",

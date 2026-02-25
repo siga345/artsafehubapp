@@ -6,11 +6,13 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
 
 const projectCoverTypeSchema = z.enum(["GRADIENT", "IMAGE"]);
+const projectReleaseKindSchema = z.enum(["SINGLE", "ALBUM"]);
 
 const createProjectSchema = z.object({
   title: z.string().min(1).max(120),
   folderId: z.string().optional().nullable(),
   artistLabel: z.string().max(120).optional().nullable(),
+  releaseKind: projectReleaseKindSchema.optional(),
   coverType: projectCoverTypeSchema.optional(),
   coverImageUrl: z.string().max(2000).optional().nullable(),
   coverPresetKey: z.string().max(80).optional().nullable(),
@@ -25,12 +27,22 @@ export const GET = withApiHandler(async () => {
     where: { userId: user.id },
     include: {
       folder: true,
-      _count: { select: { tracks: true } }
+      _count: { select: { tracks: true } },
+      tracks: {
+        select: { id: true },
+        orderBy: [{ sortIndex: "asc" }, { createdAt: "asc" }],
+        take: 2
+      }
     },
     orderBy: { updatedAt: "desc" }
   });
 
-  return NextResponse.json(projects);
+  return NextResponse.json(
+    projects.map(({ tracks, ...project }) => ({
+      ...project,
+      singleTrackId: project.releaseKind === "SINGLE" && tracks.length === 1 ? tracks[0]?.id ?? null : null
+    }))
+  );
 });
 
 export const POST = withApiHandler(async (request: Request) => {
@@ -59,6 +71,7 @@ export const POST = withApiHandler(async (request: Request) => {
       title: body.title.trim(),
       folderId: targetFolderId,
       artistLabel: body.artistLabel?.trim() || null,
+      releaseKind: body.releaseKind ?? "ALBUM",
       coverType: body.coverType ?? "GRADIENT",
       coverImageUrl: body.coverImageUrl?.trim() || null,
       coverPresetKey: body.coverPresetKey?.trim() || (body.coverType === "IMAGE" ? null : "lime-grove"),

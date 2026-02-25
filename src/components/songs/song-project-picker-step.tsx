@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect } from "react";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -7,20 +9,25 @@ import { Select } from "@/components/ui/select";
 type ProjectOption = {
   id: string;
   title: string;
+  releaseKind?: "SINGLE" | "ALBUM";
+  singleTrackId?: string | null;
   folder?: { id: string; title: string } | null;
   _count?: { tracks?: number };
 };
 
 type ProjectSelectionMode = "existing" | "new";
+type ProjectReleaseKind = "SINGLE" | "ALBUM";
 
 type SongProjectPickerStepProps = {
   projects: ProjectOption[];
   selectionMode: ProjectSelectionMode;
   selectedProjectId: string;
   newProjectTitle: string;
+  newProjectReleaseKind?: ProjectReleaseKind;
   onSelectionModeChange: (mode: ProjectSelectionMode) => void;
   onSelectedProjectIdChange: (projectId: string) => void;
   onNewProjectTitleChange: (title: string) => void;
+  onNewProjectReleaseKindChange?: (kind: ProjectReleaseKind) => void;
   onConfirm: () => void;
   confirmLabel: string;
   busy?: boolean;
@@ -28,6 +35,8 @@ type SongProjectPickerStepProps = {
   modeLabel?: string;
   onBack?: () => void;
   backLabel?: string;
+  allowNewProjectKindChoice?: boolean;
+  singleTrackTitle?: string;
 };
 
 export function SongProjectPickerStep({
@@ -35,17 +44,38 @@ export function SongProjectPickerStep({
   selectionMode,
   selectedProjectId,
   newProjectTitle,
+  newProjectReleaseKind = "ALBUM",
   onSelectionModeChange,
   onSelectedProjectIdChange,
   onNewProjectTitleChange,
+  onNewProjectReleaseKindChange,
   onConfirm,
   confirmLabel,
   busy = false,
   error = "",
   modeLabel,
   onBack,
-  backLabel = "Назад"
+  backLabel = "Назад",
+  allowNewProjectKindChoice = false,
+  singleTrackTitle = ""
 }: SongProjectPickerStepProps) {
+  useEffect(() => {
+    const normalizedTrackTitle = singleTrackTitle.trim();
+    if (!normalizedTrackTitle) return;
+    if (selectionMode !== "new") return;
+    if (!allowNewProjectKindChoice) return;
+    if (newProjectReleaseKind !== "SINGLE") return;
+    if (newProjectTitle === normalizedTrackTitle) return;
+    onNewProjectTitleChange(normalizedTrackTitle);
+  }, [
+    allowNewProjectKindChoice,
+    newProjectReleaseKind,
+    newProjectTitle,
+    onNewProjectTitleChange,
+    selectionMode,
+    singleTrackTitle
+  ]);
+
   const canConfirm =
     selectionMode === "existing" ? Boolean(selectedProjectId && selectedProjectId !== "NONE") : Boolean(newProjectTitle.trim());
 
@@ -87,6 +117,7 @@ export function SongProjectPickerStep({
             {projects.map((project) => (
               <option key={project.id} value={project.id}>
                 {project.title}
+                {project.releaseKind ? ` • ${project.releaseKind === "SINGLE" ? "Single" : "Album"}` : ""}
                 {project.folder?.title ? ` • ${project.folder.title}` : ""}
               </option>
             ))}
@@ -97,15 +128,38 @@ export function SongProjectPickerStep({
         </div>
       ) : (
         <div className="space-y-2">
+          {allowNewProjectKindChoice && onNewProjectReleaseKindChange ? (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant={newProjectReleaseKind === "SINGLE" ? "primary" : "secondary"}
+                className={newProjectReleaseKind === "SINGLE" ? "" : "border-brand-border bg-white/85 text-brand-ink hover:bg-white"}
+                onClick={() => onNewProjectReleaseKindChange("SINGLE")}
+              >
+                Single
+              </Button>
+              <Button
+                type="button"
+                variant={newProjectReleaseKind === "ALBUM" ? "primary" : "secondary"}
+                className={newProjectReleaseKind === "ALBUM" ? "" : "border-brand-border bg-white/85 text-brand-ink hover:bg-white"}
+                onClick={() => onNewProjectReleaseKindChange("ALBUM")}
+              >
+                Album
+              </Button>
+            </div>
+          ) : null}
           <Input
             value={newProjectTitle}
             onChange={(event) => onNewProjectTitleChange(event.target.value)}
-            placeholder="Название нового проекта"
+            placeholder={allowNewProjectKindChoice && newProjectReleaseKind === "SINGLE" ? "Название нового single" : "Название нового проекта"}
             className="border-brand-border bg-white/90 text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
           />
           <p className="text-xs text-brand-muted">
-            Будет создан новый проект и выбран для сохранения трека.
+            Будет создан новый {allowNewProjectKindChoice ? (newProjectReleaseKind === "SINGLE" ? "single" : "album") : "проект"} и выбран для сохранения трека.
           </p>
+          {allowNewProjectKindChoice && newProjectReleaseKind === "SINGLE" && singleTrackTitle.trim() ? (
+            <p className="text-xs text-brand-muted">Для single название проекта автоматически совпадает с названием трека.</p>
+          ) : null}
         </div>
       )}
 
@@ -133,5 +187,4 @@ export function SongProjectPickerStep({
   );
 }
 
-export type { ProjectOption, ProjectSelectionMode };
-
+export type { ProjectOption, ProjectSelectionMode, ProjectReleaseKind };

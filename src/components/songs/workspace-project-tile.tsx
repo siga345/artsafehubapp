@@ -1,11 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
+import { Disc3, Music2 } from "lucide-react";
 
 import { PlaybackIcon } from "@/components/songs/playback-icon";
-import { playbackAccentButtonStyle } from "@/lib/songs-playback-helpers";
 import type { WorkspaceProjectNode } from "@/components/songs/workspace-types";
+import { buildProjectCoverStyle } from "@/lib/project-cover-style";
+import { playbackAccentButtonStyle } from "@/lib/songs-playback-helpers";
+import { getProjectOpenHref } from "@/lib/songs-project-navigation";
+import { resolveVersionTypeByStage } from "@/lib/songs-version-stage-map";
 
 type WorkspaceProjectTileProps = {
   node: WorkspaceProjectNode;
@@ -18,22 +22,23 @@ type WorkspaceProjectTileProps = {
   dragState?: "idle" | "dragging" | "drop-target" | "drop-invalid";
 };
 
-function coverStyle(node: WorkspaceProjectNode): CSSProperties {
-  const meta = node.projectMeta;
-  if (meta.coverType === "IMAGE" && meta.coverImageUrl) {
-    return {
-      backgroundImage: `url(${meta.coverImageUrl})`,
-      backgroundSize: "cover",
-      backgroundPosition: "center"
-    };
-  }
-  return {
-    background: `linear-gradient(145deg, ${meta.coverColorA || "#D9F99D"}, ${meta.coverColorB || "#65A30D"})`
-  };
+function formatProjectBadgeDate(value: string) {
+  return new Date(value).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
 }
 
-function formatDate(value: string) {
-  return new Date(value).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
+function getTrackStatusLabel(stageName: string | null | undefined) {
+  if (!stageName) return "не выбран";
+  const versionType = resolveVersionTypeByStage({ id: 0, name: stageName });
+  const statusByVersionType = {
+    IDEA_TEXT: "Идея",
+    DEMO: "Демо",
+    ARRANGEMENT: "Продакшн",
+    NO_MIX: "Запись",
+    MIXED: "Сведение",
+    MASTERED: "Мастеринг",
+    RELEASE: "Релиз"
+  } as const;
+  return versionType ? statusByVersionType[versionType] : stageName;
 }
 
 export function WorkspaceProjectTile({
@@ -46,6 +51,17 @@ export function WorkspaceProjectTile({
   tileProps,
   dragState = "idle"
 }: WorkspaceProjectTileProps) {
+  const projectOpenHref = getProjectOpenHref({
+    id: node.id,
+    releaseKind: node.projectMeta.releaseKind ?? "ALBUM",
+    singleTrackId: node.projectMeta.singleTrackId ?? null
+  });
+  const releaseKind = node.projectMeta.releaseKind ?? "ALBUM";
+  const releaseLabel = releaseKind === "SINGLE" ? "Single" : "Album";
+  const singleStageLabel =
+    releaseKind === "SINGLE" && node.projectMeta.singleTrackId
+      ? `Статус ${getTrackStatusLabel(node.projectMeta.singleTrackStageName)}`
+      : null;
   const accent = playbackAccentButtonStyle({
     colorA: node.projectMeta.coverColorA || "#D9F99D",
     colorB: node.projectMeta.coverColorB || "#65A30D"
@@ -62,37 +78,60 @@ export function WorkspaceProjectTile({
   return (
     <div
       {...tileProps}
-      className={`rounded-3xl border border-brand-border bg-white/85 p-3 shadow-sm transition hover:-translate-y-0.5 hover:bg-white hover:shadow-md ${dragClasses} ${tileProps?.className ?? ""}`}
+      className={`rounded-3xl bg-transparent p-0 shadow-none transition hover:-translate-y-0.5 ${dragClasses} ${tileProps?.className ?? ""}`}
     >
-      <div className="mb-3 flex items-center justify-end">
-        <div className="relative">
-          <button
-            type="button"
-            className="rounded-xl border border-brand-border bg-white/80 px-2 py-1 text-xs text-brand-ink hover:bg-white"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onToggleMenu();
-            }}
-            aria-label="Project actions"
+      <Link href={projectOpenHref} className="group block">
+        <div className="relative aspect-square overflow-visible rounded-2xl">
+          <div
+            className="relative h-full w-full overflow-hidden rounded-2xl shadow-sm transition-shadow group-hover:shadow-md"
+            style={buildProjectCoverStyle({
+              releaseKind,
+              coverType: node.projectMeta.coverType,
+              coverImageUrl: node.projectMeta.coverImageUrl,
+              coverPresetKey: node.projectMeta.coverPresetKey,
+              coverColorA: node.projectMeta.coverColorA,
+              coverColorB: node.projectMeta.coverColorB
+            })}
           >
-            •••
-          </button>
-          {menuOpen && menuContent}
-        </div>
-      </div>
-
-      <Link href={`/songs/projects/${node.id}`} className="group block">
-        <div className="relative mb-3 aspect-square overflow-hidden rounded-2xl" style={coverStyle(node)}>
-          <div className="absolute inset-0 bg-gradient-to-br from-white/10 via-transparent to-black/20" />
-          {node.pinnedAt && (
-            <div className="absolute left-2 top-2 rounded-lg bg-black/25 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-white backdrop-blur">
-              Pinned
+            <div className="absolute inset-0 bg-gradient-to-br from-white/8 via-transparent to-black/12" />
+            <div className="absolute left-3 top-3 inline-flex items-center gap-1 rounded-lg bg-black/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-white backdrop-blur">
+              <Disc3 className="h-3 w-3" />
+              {releaseLabel}
             </div>
-          )}
+            <div className="absolute right-14 top-3 rounded-lg bg-black/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-white backdrop-blur">
+              {formatProjectBadgeDate(node.updatedAt)}
+            </div>
+
+            <div className="absolute bottom-4 left-4 right-20 text-white">
+              <p className="truncate text-base font-semibold drop-shadow-sm">{node.title}</p>
+              <p className="mt-0.5 inline-flex items-center gap-1 text-xs text-white/90 drop-shadow-sm">
+                <Music2 className="h-3 w-3" />
+                {singleStageLabel ?? `${node.projectMeta.trackCount || 0} трек.`}
+              </p>
+            </div>
+          </div>
+
+          <div className="absolute right-3 top-3 z-10">
+            <div className="relative">
+              <button
+                type="button"
+                className="rounded-xl border border-white/25 bg-white/15 px-2 py-1 text-xs text-white shadow-sm backdrop-blur hover:bg-white/25"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onToggleMenu();
+                }}
+                aria-label="Project actions"
+              >
+                •••
+              </button>
+              {menuOpen && menuContent}
+            </div>
+          </div>
+
           <button
             type="button"
-            className="absolute bottom-2 left-2 z-[1] grid h-11 w-11 place-items-center rounded-xl border text-lg backdrop-blur hover:brightness-95"
+            className="absolute bottom-4 right-4 z-[1] grid h-12 w-12 place-items-center rounded-full border text-lg shadow-lg backdrop-blur hover:brightness-95"
             style={accent}
             onClick={(event) => {
               event.preventDefault();
@@ -103,19 +142,6 @@ export function WorkspaceProjectTile({
           >
             {playLoading ? "…" : <PlaybackIcon type="play" className="h-4 w-4" />}
           </button>
-          <div className="absolute bottom-2 right-2 rounded-xl bg-black/35 px-2 py-1 text-xs text-white backdrop-blur">
-            {node.projectMeta.trackCount} трек.
-          </div>
-        </div>
-
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-lg font-semibold text-brand-ink">{node.title}</p>
-            <p className="truncate text-sm text-brand-muted">
-              {node.projectMeta.artistLabel || "ART SAFE"} • {formatDate(node.updatedAt)}
-            </p>
-          </div>
-          <div className="rounded-xl border border-brand-border bg-white px-2 py-1 text-sm text-brand-ink shadow-sm">Open</div>
         </div>
       </Link>
     </div>

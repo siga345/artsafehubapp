@@ -3,7 +3,7 @@ export type SongStageLike = {
   name: string;
 };
 
-export type DemoVersionType = "IDEA_TEXT" | "DEMO" | "ARRANGEMENT" | "NO_MIX" | "MIXED" | "MASTERED";
+export type DemoVersionType = "IDEA_TEXT" | "DEMO" | "ARRANGEMENT" | "NO_MIX" | "MIXED" | "MASTERED" | "RELEASE";
 
 export function normalizeSongStageName(name: string) {
   return name.toLowerCase().replace(/\s+/g, " ").trim();
@@ -24,11 +24,18 @@ export function isDemoSongStage(name: string) {
 }
 
 export function isReleaseSongStage(name: string) {
-  return normalizeSongStageName(name).includes("релиз");
+  const stageName = normalizeSongStageName(name);
+  return (
+    stageName.includes("релиз") ||
+    stageName.includes("дистр") ||
+    stageName.includes("наслед") ||
+    stageName.includes("культурн") ||
+    stageName.includes("влияни")
+  );
 }
 
 export function isSelectableSongCreationStage(stage: SongStageLike) {
-  return !isPromoSongStage(stage.name) && !isIdeaSongStage(stage.name) && !isReleaseSongStage(stage.name);
+  return !isPromoSongStage(stage.name) && !isIdeaSongStage(stage.name);
 }
 
 export function findIdeaStage(stages: SongStageLike[] | undefined) {
@@ -61,8 +68,7 @@ export function resolveVersionTypeByStage(stage: SongStageLike): DemoVersionType
   if (stageName.includes("широкая известность") || stageName.includes("медийн") || stageName.includes("мастер")) {
     return "MASTERED";
   }
-  if (isReleaseSongStage(stage.name)) return null;
+  if (isReleaseSongStage(stage.name)) return "RELEASE";
 
   return null;
 }
-
