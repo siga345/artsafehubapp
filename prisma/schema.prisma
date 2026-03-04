@@ -19,6 +19,11 @@ enum FindCategory {
   AUDIO_ENGINEER
   RECORDING_STUDIO
   PROMO_CREW
+  COVER_ARTIST
+  COVER_PHOTOGRAPHER
+  VIDEOGRAPHER
+  CLIP_PRODUCTION_TEAM
+  DESIGNER
 }
 
 enum CheckInMood {
@@ -66,6 +71,277 @@ enum ProjectReleaseKind {
   ALBUM
 }
 
+enum InAppRequestType {
+  PRODUCTION
+  MIX_MASTER
+  STUDIO_SESSION
+  PROMO_PRODUCTION
+}
+
+enum InAppRequestStatus {
+  DRAFT
+  SUBMITTED
+  VIEWED
+  ACCEPTED
+  DECLINED
+  CANCELLED
+  EXPIRED
+  ARCHIVED
+}
+
+enum InAppRequestActionType {
+  SUBMIT
+  MARK_VIEWED
+  ACCEPT
+  DECLINE
+  CANCEL
+  ARCHIVE
+}
+
+enum ArtistGoalType {
+  ALBUM_RELEASE
+  MINI_TOUR
+  FESTIVAL_RUN
+  SOLO_SHOW
+  MERCH_DROP
+  CUSTOM_CAREER
+}
+
+enum ArtistGoalStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum GoalFactor {
+  DIRECTION
+  ARTIST_WORLD
+  CATALOG
+  AUDIENCE
+  LIVE
+  TEAM
+  OPERATIONS
+}
+
+enum GoalMotionType {
+  CRAFT
+  CREATIVE
+}
+
+enum GoalTaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  DONE
+}
+
+enum TaskPriority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum TaskOwnerType {
+  SELF
+  TEAM
+  EXTERNAL
+}
+
+enum DailyFocusSource {
+  AUTO
+  MANUAL
+}
+
+enum TrackWorkbenchState {
+  IN_PROGRESS
+  STUCK
+  NEEDS_FEEDBACK
+  DEFERRED
+  READY_FOR_NEXT_STEP
+}
+
+enum FeedbackRequestType {
+  TEXT
+  DEMO
+  ARRANGEMENT
+  GENERAL_IMPRESSION
+}
+
+enum FeedbackRequestStatus {
+  PENDING
+  RECEIVED
+  REVIEWED
+}
+
+enum FeedbackRecipientMode {
+  INTERNAL_USER
+  EXTERNAL_CONTACT
+  COMMUNITY
+}
+
+enum FeedbackItemCategory {
+  WHAT_WORKS
+  NOT_READING
+  SAGS
+  WANT_TO_HEAR_NEXT
+}
+
+enum FeedbackResolutionStatus {
+  ACCEPTED
+  REJECTED
+  NEXT_VERSION
+}
+
+enum NextStepStatus {
+  ACTIVE
+  DONE
+  CANCELED
+}
+
+enum RecommendationSource {
+  MANUAL
+  SYSTEM
+  AI
+}
+
+enum RecommendationSurface {
+  HOME_COMMAND_CENTER
+  TODAY
+  SONGS
+  LEARN
+}
+
+enum RecommendationKind {
+  NEXT_STEP
+  DIAGNOSTIC
+  GOAL_ACTION
+  TODAY_FOCUS
+  LEARN_CONTEXT
+}
+
+enum RecommendationEventType {
+  VIEWED
+  CLICKED_PRIMARY
+  CLICKED_SECONDARY
+  DISMISSED
+  APPLIED
+  COMPLETED
+}
+
+enum NextStepOrigin {
+  SONG_DETAIL
+  MORNING_FOCUS
+  WRAP_UP
+}
+
+enum CommunityPostVisibility {
+  COMMUNITY
+}
+
+enum CommunityPostKind {
+  PROGRESS
+  FEEDBACK_REQUEST
+  CREATIVE_QUESTION
+  GENERAL
+}
+
+enum CommunityHelpfulActionType {
+  I_CAN_HELP
+  I_RELATED
+  KEEP_GOING
+}
+
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+enum CommunityFeedItemType {
+  POST
+  ACHIEVEMENT
+  EVENT
+}
+
+enum CommunityAchievementType {
+  PATH_STAGE_REACHED
+  TRACK_CREATED
+  DEMO_UPLOADED
+  REQUEST_SUBMITTED
+  RELEASE_READY
+  TRACK_RETURNED
+  DEMO_COMPLETED
+  FEEDBACK_REQUESTED
+  ARTIST_HELPED
+}
+
+enum CommunityLikeTargetType {
+  POST
+  ACHIEVEMENT
+  EVENT
+}
+
+enum CommunityEventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+}
+
+enum ArtistWorldThemePreset {
+  EDITORIAL
+  STUDIO
+  CINEMATIC
+  MINIMAL
+}
+
+enum ArtistWorldBackgroundMode {
+  GRADIENT
+  IMAGE
+}
+
+enum ArtistSupportNeedType {
+  FEEDBACK
+  ACCOUNTABILITY
+  CREATIVE_DIRECTION
+  COLLABORATION
+}
+
+enum CommunityFeedbackThreadStatus {
+  OPEN
+  CLOSED
+  ARCHIVED
+}
+
+enum LearnProgressStatus {
+  OPEN
+  APPLIED
+  NOT_RELEVANT
+  LATER
+}
+
+enum LearnContextSurface {
+  LEARN
+  TODAY
+  GOALS
+  SONGS
+}
+
+enum LearnApplicationTargetType {
+  TRACK
+  GOAL
+}
+
+enum TrackDecisionType {
+  NEXT_STEP_SET
+  NEXT_STEP_COMPLETED
+  NEXT_STEP_CANCELED
+  FEEDBACK_OUTCOME_RECORDED
+  WRAP_UP_RECORDED
+  REFLECTION_CAPTURED
+}
+
 model User {
   id                   String             @id @default(cuid())
   safeId               String             @unique @default(cuid())
@@ -89,6 +365,35 @@ model User {
   checkIns             DailyCheckIn[]
   weeklyActivities     WeeklyActivity[]
   microSteps           DailyMicroStep[]
+  artistRequests       InAppRequest[]     @relation("ArtistRequests")
+  specialistRequests   InAppRequest[]     @relation("SpecialistRequests")
+  requestActions       InAppRequestAction[]
+  onboarding           UserOnboardingState?
+  identityProfile      ArtistIdentityProfile?
+  artistWorldProjects  ArtistWorldProject[]
+  artistWorldReferences ArtistWorldReference[]
+  goals                ArtistGoal[]
+  dailyFocuses         DailyFocus[]
+  trackNextSteps       TrackNextStep[]
+  dailyTrackFocuses    DailyTrackFocus[]
+  dailyWrapUps         DailyWrapUp[]
+  communityPosts       CommunityPost[]
+  communityAchievements CommunityAchievement[]
+  communityLikes       CommunityLike[]
+  communityEventsCreated CommunityEvent[]      @relation("CommunityEventCreator")
+  communityFeedbackThreads CommunityFeedbackThread[] @relation("CommunityFeedbackThreadAuthor")
+  communityFeedbackReplies CommunityFeedbackReply[] @relation("CommunityFeedbackReplyAuthor")
+  featuredCreator      FeaturedCreator?
+  feedbackRequests     FeedbackRequest[]       @relation("FeedbackRequestAuthor")
+  receivedFeedbackRequests FeedbackRequest[]   @relation("FeedbackRequestRecipient")
+  authoredFeedbackItems FeedbackItem[]         @relation("FeedbackItemAuthor")
+  feedbackResolutions  FeedbackResolution[]
+  outgoingFriendships  Friendship[]            @relation("FriendshipRequester")
+  incomingFriendships  Friendship[]            @relation("FriendshipAddressee")
+  learnMaterialProgresses LearnMaterialProgress[]
+  recommendationEvents RecommendationEvent[]
+  trackDecisions       TrackDecision[]
+  learnApplications    LearnApplication[]
 }
 
 model SpecialistProfile {
@@ -147,6 +452,7 @@ model Project {
   user           User             @relation(fields: [userId], references: [id])
   folder         Folder?          @relation(fields: [folderId], references: [id], onDelete: SetNull)
   tracks         Track[]
+  goalTasks      GoalTask[]       @relation("GoalTaskProject")
 
   @@index([userId, updatedAt])
   @@index([folderId])
@@ -169,6 +475,7 @@ model Track {
   displayKeyConfidence Float?
   displayAnalysisSource String?
   displayAnalysisUpdatedAt DateTime?
+  workbenchState TrackWorkbenchState @default(IN_PROGRESS)
   sortIndex     Int        @default(0)
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
@@ -178,7 +485,21 @@ model Track {
   primaryDemo   Demo?      @relation("TrackPrimaryDemo", fields: [primaryDemoId], references: [id], onDelete: SetNull)
   pathStage     PathStage? @relation(fields: [pathStageId], references: [id], onDelete: SetNull)
   demos         Demo[]     @relation("TrackDemos")
+  trackIntent   TrackIntent?
+  nextSteps     TrackNextStep[]
+  dailyTrackFocuses DailyTrackFocus[]
+  dailyWrapUps  DailyWrapUp[]
   distributionRequest TrackDistributionRequest?
+  inAppRequests  InAppRequest[]
+  goalTasks      GoalTask[] @relation("GoalTaskTrack")
+  communityAchievements CommunityAchievement[]
+  feedbackRequests FeedbackRequest[]
+  communityPosts  CommunityPost[]
+  communityFeedbackThreads CommunityFeedbackThread[]
+  learnMaterialProgresses LearnMaterialProgress[] @relation("LearnProgressTrack")
+  recommendationEvents RecommendationEvent[]
+  trackDecisions    TrackDecision[]
+  learnApplications LearnApplication[] @relation("LearnApplicationTrack")
 
   @@index([projectId, sortIndex])
   @@index([primaryDemoId])
@@ -203,10 +524,113 @@ model Demo {
   sortIndex        Int             @default(0)
   createdAt        DateTime        @default(now())
   track            Track           @relation("TrackDemos", fields: [trackId], references: [id], onDelete: Cascade)
+  versionReflection VersionReflection?
   primaryForTracks Track[]         @relation("TrackPrimaryDemo")
   distributionRequests TrackDistributionRequest[] @relation("DistributionRequestMasterDemo")
+  inAppRequests      InAppRequest[]
+  communityAchievements CommunityAchievement[]
+  feedbackRequests   FeedbackRequest[]
+  feedbackResolutionTargets FeedbackResolution[] @relation("FeedbackResolutionTargetDemo")
+  communityPosts     CommunityPost[]
+  communityFeedbackThreads CommunityFeedbackThread[]
+  trackDecisions     TrackDecision[]
 
   @@index([trackId, versionType, sortIndex])
+}
+
+model TrackIntent {
+  trackId    String   @id
+  summary    String
+  whyNow     String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  track      Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+}
+
+model VersionReflection {
+  demoId           String   @id
+  whyMade          String?
+  whatChanged      String?
+  whatNotWorking   String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  demo             Demo     @relation(fields: [demoId], references: [id], onDelete: Cascade)
+}
+
+model TrackNextStep {
+  id                   String               @id @default(cuid())
+  userId               String
+  trackId              String
+  text                 String
+  reason               String?
+  status               NextStepStatus       @default(ACTIVE)
+  recommendationSource RecommendationSource @default(MANUAL)
+  origin               NextStepOrigin       @default(SONG_DETAIL)
+  completedAt          DateTime?
+  canceledAt           DateTime?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  user                 User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track                Track                @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  dailyTrackFocuses DailyTrackFocus[]
+  dailyWrapUps DailyWrapUp[]
+  trackDecisions TrackDecision[]
+
+  @@index([trackId, status, updatedAt])
+  @@index([userId, updatedAt])
+}
+
+model RecommendationEvent {
+  id                String                  @id @default(cuid())
+  userId            String
+  surface           RecommendationSurface
+  kind              RecommendationKind
+  eventType         RecommendationEventType
+  source            RecommendationSource
+  recommendationKey String
+  entityType        String?
+  entityId          String?
+  trackId           String?
+  goalId            String?
+  materialKey       String?
+  payload           Json?
+  createdAt         DateTime                @default(now())
+  user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track             Track?                  @relation(fields: [trackId], references: [id], onDelete: SetNull)
+  goal              ArtistGoal?             @relation(fields: [goalId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([surface, kind, createdAt])
+  @@index([recommendationKey, createdAt])
+  @@index([trackId])
+  @@index([goalId])
+}
+
+model TrackDecision {
+  id                String               @id @default(cuid())
+  userId            String
+  trackId           String
+  demoId            String?
+  nextStepId        String?
+  feedbackItemId    String?
+  type              TrackDecisionType
+  source            RecommendationSource
+  reason            String?
+  summary           String
+  recommendationKey String?
+  contextSnapshot   Json?
+  createdAt         DateTime             @default(now())
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track             Track                @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  demo              Demo?                @relation(fields: [demoId], references: [id], onDelete: SetNull)
+  nextStep          TrackNextStep?       @relation(fields: [nextStepId], references: [id], onDelete: SetNull)
+  feedbackItem      FeedbackItem?        @relation(fields: [feedbackItemId], references: [id], onDelete: SetNull)
+
+  @@index([trackId, createdAt])
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@index([nextStepId])
+  @@index([feedbackItemId])
 }
 
 model TrackDistributionRequest {
@@ -237,6 +661,78 @@ model TrackDistributionRequest {
   @@index([status])
 }
 
+model FeedbackRequest {
+  id               String                @id @default(cuid())
+  userId           String
+  trackId          String
+  demoId           String?
+  type             FeedbackRequestType
+  status           FeedbackRequestStatus @default(PENDING)
+  recipientMode    FeedbackRecipientMode
+  recipientUserId  String?
+  recipientLabel   String
+  recipientChannel String?
+  recipientContact String?
+  requestMessage   String?
+  lyricsSnapshot   String?
+  sentAt           DateTime              @default(now())
+  receivedAt       DateTime?
+  reviewedAt       DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  user             User                  @relation("FeedbackRequestAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  track            Track                 @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  demo             Demo?                 @relation(fields: [demoId], references: [id], onDelete: SetNull)
+  recipientUser    User?                 @relation("FeedbackRequestRecipient", fields: [recipientUserId], references: [id], onDelete: SetNull)
+  communityPost    CommunityPost?
+  communityThread  CommunityFeedbackThread?
+  items            FeedbackItem[]
+
+  @@index([trackId, updatedAt])
+  @@index([userId, status, updatedAt])
+  @@index([recipientUserId, status, updatedAt])
+}
+
+model FeedbackItem {
+  id        String               @id @default(cuid())
+  requestId String
+  authorUserId String?
+  communityReplyId String?
+  source    String               @default("OWNER_ENTRY")
+  category  FeedbackItemCategory
+  body      String
+  sortIndex Int                  @default(0)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  request    FeedbackRequest     @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  authorUser User?               @relation("FeedbackItemAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  communityReply CommunityFeedbackReply? @relation(fields: [communityReplyId], references: [id], onDelete: SetNull)
+  resolution FeedbackResolution?
+  trackDecisions TrackDecision[]
+
+  @@index([requestId, category, sortIndex])
+  @@index([authorUserId, createdAt])
+  @@index([communityReplyId])
+}
+
+model FeedbackResolution {
+  id             String                   @id @default(cuid())
+  userId         String
+  feedbackItemId String                   @unique
+  status         FeedbackResolutionStatus
+  note           String?
+  targetDemoId   String?
+  resolvedAt     DateTime                 @default(now())
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+  user           User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  feedbackItem   FeedbackItem             @relation(fields: [feedbackItemId], references: [id], onDelete: Cascade)
+  targetDemo     Demo?                    @relation("FeedbackResolutionTargetDemo", fields: [targetDemoId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, updatedAt])
+  @@index([targetDemoId])
+}
+
 model PathStage {
   id          Int              @id @default(autoincrement())
   order       Int              @unique
@@ -246,6 +742,175 @@ model PathStage {
   users       User[]
   tracks      Track[]
   microSteps  DailyMicroStep[]
+  createdGoals ArtistGoal[]
+  communityAchievements CommunityAchievement[]
+}
+
+model ArtistIdentityProfile {
+  userId                String                     @id
+  identityStatement     String?
+  mission               String?
+  philosophy            String?
+  values                String[]                   @default([])
+  coreThemes            String[]                   @default([])
+  aestheticKeywords     String[]                   @default([])
+  visualDirection       String?
+  audienceCore          String?
+  differentiator        String?
+  fashionSignals        String[]                   @default([])
+  currentFocusTitle     String?
+  currentFocusDetail    String?
+  seekingSupportDetail  String?
+  supportNeedTypes      ArtistSupportNeedType[]    @default([])
+  worldThemePreset      ArtistWorldThemePreset     @default(EDITORIAL)
+  worldBackgroundMode   ArtistWorldBackgroundMode  @default(GRADIENT)
+  worldBackgroundColorA String?
+  worldBackgroundColorB String?
+  worldBackgroundImageUrl String?
+  worldBlockOrder       Json?
+  worldHiddenBlocks     Json?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+  user                  User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ArtistWorldProject {
+  id            String   @id @default(cuid())
+  userId        String
+  title         String
+  subtitle      String?
+  description   String?
+  linkUrl       String?
+  coverImageUrl String?
+  sortIndex     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, sortIndex])
+}
+
+model ArtistWorldReference {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  creator   String?
+  note      String?
+  linkUrl   String?
+  imageUrl  String?
+  sortIndex Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, sortIndex])
+}
+
+model ArtistGoal {
+  id                     String           @id @default(cuid())
+  userId                 String
+  type                   ArtistGoalType
+  title                  String
+  whyNow                 String?
+  successDefinition      String?
+  targetDate             DateTime?        @db.Date
+  status                 ArtistGoalStatus @default(ACTIVE)
+  isPrimary              Boolean          @default(false)
+  createdFromPathStageId Int?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+  user                   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdFromPathStage   PathStage?       @relation(fields: [createdFromPathStageId], references: [id], onDelete: SetNull)
+  pillars                GoalPillar[]
+  dailyFocuses           DailyFocus[]
+  learnMaterialProgresses LearnMaterialProgress[] @relation("LearnProgressGoal")
+  recommendationEvents   RecommendationEvent[]
+  learnApplications      LearnApplication[] @relation("LearnApplicationGoal")
+
+  @@index([userId, status, updatedAt])
+  @@index([userId, isPrimary])
+  @@index([createdFromPathStageId])
+}
+
+model GoalPillar {
+  id                String         @id @default(cuid())
+  goalId            String
+  factor            GoalFactor
+  defaultMotionType GoalMotionType
+  title             String
+  purpose           String
+  sortIndex         Int            @default(0)
+  goal              ArtistGoal     @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  tasks             GoalTask[]
+
+  @@unique([goalId, factor])
+  @@index([goalId, sortIndex])
+}
+
+model GoalTask {
+  id                      String         @id @default(cuid())
+  pillarId                String
+  title                   String
+  description             String?
+  status                  GoalTaskStatus @default(TODO)
+  motionType              GoalMotionType
+  priority                TaskPriority   @default(MEDIUM)
+  ownerType               TaskOwnerType  @default(SELF)
+  dueDate                 DateTime?      @db.Date
+  linkedTrackId           String?
+  linkedProjectId         String?
+  linkedSpecialistCategory FindCategory?
+  sortIndex               Int            @default(0)
+  startedAt               DateTime?
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+  completedAt             DateTime?
+  pillar                  GoalPillar     @relation(fields: [pillarId], references: [id], onDelete: Cascade)
+  linkedTrack             Track?         @relation("GoalTaskTrack", fields: [linkedTrackId], references: [id], onDelete: SetNull)
+  linkedProject           Project?       @relation("GoalTaskProject", fields: [linkedProjectId], references: [id], onDelete: SetNull)
+  dailyFocuses            DailyFocus[]
+
+  @@index([pillarId, status, sortIndex])
+  @@index([linkedTrackId])
+  @@index([linkedProjectId])
+  @@index([linkedSpecialistCategory])
+}
+
+model DailyFocus {
+  id          String           @id @default(cuid())
+  userId      String
+  date        DateTime         @db.Date
+  goalId      String
+  goalTaskId  String
+  source      DailyFocusSource @default(AUTO)
+  isCompleted Boolean          @default(false)
+  completedAt DateTime?
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goal        ArtistGoal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  goalTask     GoalTask        @relation(fields: [goalTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([goalTaskId, date])
+  @@index([goalId, date])
+}
+
+model DailyTrackFocus {
+  id         String   @id @default(cuid())
+  userId     String
+  date       DateTime @db.Date
+  trackId    String
+  nextStepId String?
+  focusNote  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track      Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  nextStep   TrackNextStep? @relation(fields: [nextStepId], references: [id], onDelete: SetNull)
+  wrapUp     DailyWrapUp?
+
+  @@unique([userId, date])
+  @@index([trackId, date])
+  @@index([nextStepId])
 }
 
 model DailyCheckIn {
@@ -258,6 +923,29 @@ model DailyCheckIn {
   user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, date])
+}
+
+model DailyWrapUp {
+  id             String             @id @default(cuid())
+  userId         String
+  date           DateTime           @db.Date
+  trackId        String
+  focusId        String?            @unique
+  nextStepId     String
+  endState       TrackWorkbenchState
+  whatChanged    String
+  whatNotWorking String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track          Track              @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  focus          DailyTrackFocus?   @relation(fields: [focusId], references: [id], onDelete: SetNull)
+  nextStep       TrackNextStep      @relation(fields: [nextStepId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, date])
+  @@index([trackId, date])
+  @@index([focusId])
+  @@index([nextStepId])
 }
 
 model DailyMicroStep {
@@ -287,4 +975,267 @@ model WeeklyActivity {
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, weekStartDate])
+}
+
+model InAppRequest {
+  id                String               @id @default(cuid())
+  type              InAppRequestType
+  status            InAppRequestStatus   @default(SUBMITTED)
+  artistUserId      String
+  specialistUserId  String
+  trackId           String?
+  demoId            String?
+  serviceLabel      String?
+  brief             String
+  preferredStartAt  DateTime?
+  city              String?
+  isRemote          Boolean              @default(true)
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  artist            User                 @relation("ArtistRequests", fields: [artistUserId], references: [id], onDelete: Cascade)
+  specialist        User                 @relation("SpecialistRequests", fields: [specialistUserId], references: [id], onDelete: Cascade)
+  track             Track?               @relation(fields: [trackId], references: [id], onDelete: SetNull)
+  demo              Demo?                @relation(fields: [demoId], references: [id], onDelete: SetNull)
+  actions           InAppRequestAction[]
+  communityAchievements CommunityAchievement[]
+
+  @@index([artistUserId, createdAt])
+  @@index([specialistUserId, createdAt])
+  @@index([status, createdAt])
+  @@index([trackId])
+}
+
+model InAppRequestAction {
+  id          String                 @id @default(cuid())
+  requestId   String
+  actorUserId String
+  action      InAppRequestActionType
+  comment     String?
+  createdAt   DateTime               @default(now())
+  request     InAppRequest           @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  actor       User                   @relation(fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+model UserOnboardingState {
+  userId      String   @id
+  dismissedAt DateTime?
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model LearnMaterialProgress {
+  id                    String                     @id @default(cuid())
+  userId                String
+  materialKey           String
+  status                LearnProgressStatus
+  firstOpenedAt         DateTime?
+  lastOpenedAt          DateTime?
+  appliedAt             DateTime?
+  laterAt               DateTime?
+  notRelevantAt         DateTime?
+  lastSurface           LearnContextSurface?
+  lastAppliedTargetType LearnApplicationTargetType?
+  lastAppliedTrackId    String?
+  lastAppliedGoalId     String?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+  user                  User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastAppliedTrack      Track?                     @relation("LearnProgressTrack", fields: [lastAppliedTrackId], references: [id], onDelete: SetNull)
+  lastAppliedGoal       ArtistGoal?                @relation("LearnProgressGoal", fields: [lastAppliedGoalId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, materialKey])
+  @@index([userId, status, updatedAt])
+  @@index([lastAppliedTrackId])
+  @@index([lastAppliedGoalId])
+}
+
+model LearnApplication {
+  id                String                     @id @default(cuid())
+  userId            String
+  materialKey       String
+  surface           LearnContextSurface
+  targetType        LearnApplicationTargetType
+  targetTrackId     String?
+  targetGoalId      String?
+  source            RecommendationSource
+  reason            String?
+  recommendationKey String?
+  contextSnapshot   Json?
+  createdAt         DateTime                   @default(now())
+  user              User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetTrack       Track?                     @relation("LearnApplicationTrack", fields: [targetTrackId], references: [id], onDelete: SetNull)
+  targetGoal        ArtistGoal?                @relation("LearnApplicationGoal", fields: [targetGoalId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([materialKey, createdAt])
+  @@index([targetTrackId])
+  @@index([targetGoalId])
+}
+
+model Friendship {
+  id              String           @id @default(cuid())
+  requesterUserId String
+  addresseeUserId String
+  status          FriendshipStatus @default(PENDING)
+  createdAt       DateTime         @default(now())
+  respondedAt     DateTime?
+  updatedAt       DateTime         @updatedAt
+  requester       User             @relation("FriendshipRequester", fields: [requesterUserId], references: [id], onDelete: Cascade)
+  addressee       User             @relation("FriendshipAddressee", fields: [addresseeUserId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterUserId, addresseeUserId])
+  @@index([requesterUserId, status, updatedAt])
+  @@index([addresseeUserId, status, updatedAt])
+}
+
+model CommunityPost {
+  id         String                  @id @default(cuid())
+  authorUserId String
+  kind       CommunityPostKind       @default(GENERAL)
+  title      String?
+  text       String
+  visibility CommunityPostVisibility @default(COMMUNITY)
+  trackId    String?
+  demoId     String?
+  feedbackRequestId String?          @unique
+  metadata   Json?
+  createdAt  DateTime                @default(now())
+  updatedAt  DateTime                @updatedAt
+  author     User                    @relation(fields: [authorUserId], references: [id], onDelete: Cascade)
+  track      Track?                  @relation(fields: [trackId], references: [id], onDelete: SetNull)
+  demo       Demo?                   @relation(fields: [demoId], references: [id], onDelete: SetNull)
+  feedbackRequest FeedbackRequest?   @relation(fields: [feedbackRequestId], references: [id], onDelete: SetNull)
+  feedbackThread CommunityFeedbackThread?
+
+  @@index([authorUserId, createdAt])
+  @@index([kind, createdAt])
+  @@index([trackId, createdAt])
+  @@index([demoId, createdAt])
+}
+
+model CommunityAchievement {
+  id                String                   @id @default(cuid())
+  userId            String
+  type              CommunityAchievementType
+  title             String
+  body              String
+  metadata          Json?
+  sourceTrackId     String?
+  sourceDemoId      String?
+  sourceRequestId   String?
+  sourcePathStageId Int?
+  dedupeKey         String                   @unique
+  createdAt         DateTime                 @default(now())
+  user              User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceTrack       Track?                   @relation(fields: [sourceTrackId], references: [id], onDelete: SetNull)
+  sourceDemo        Demo?                    @relation(fields: [sourceDemoId], references: [id], onDelete: SetNull)
+  sourceRequest     InAppRequest?            @relation(fields: [sourceRequestId], references: [id], onDelete: SetNull)
+  sourcePathStage   PathStage?               @relation(fields: [sourcePathStageId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@index([sourceTrackId])
+  @@index([sourceDemoId])
+  @@index([sourceRequestId])
+  @@index([sourcePathStageId])
+}
+
+model CommunityEvent {
+  id              String               @id @default(cuid())
+  title           String
+  slug            String               @unique
+  description     String
+  startsAt        DateTime
+  endsAt          DateTime?
+  city            String?
+  isOnline        Boolean              @default(false)
+  coverImageUrl   String?
+  hostLabel       String
+  status          CommunityEventStatus @default(DRAFT)
+  createdByUserId String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  createdByUser   User?                @relation("CommunityEventCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([status, startsAt])
+  @@index([createdByUserId, createdAt])
+}
+
+model CommunityLike {
+  id         String                  @id @default(cuid())
+  userId     String
+  targetType CommunityLikeTargetType
+  targetId   String
+  createdAt  DateTime                @default(now())
+  user       User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId, createdAt])
+}
+
+model CommunityFeedbackThread {
+  id               String                       @id @default(cuid())
+  feedbackRequestId String                     @unique
+  communityPostId  String                      @unique
+  trackId          String
+  demoId           String?
+  authorUserId     String
+  status           CommunityFeedbackThreadStatus @default(OPEN)
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+  feedbackRequest  FeedbackRequest             @relation(fields: [feedbackRequestId], references: [id], onDelete: Cascade)
+  communityPost    CommunityPost               @relation(fields: [communityPostId], references: [id], onDelete: Cascade)
+  track            Track                       @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  demo             Demo?                       @relation(fields: [demoId], references: [id], onDelete: SetNull)
+  authorUser       User                        @relation("CommunityFeedbackThreadAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+  replies          CommunityFeedbackReply[]
+
+  @@index([authorUserId, status, updatedAt])
+  @@index([trackId, status, updatedAt])
+  @@index([demoId])
+}
+
+model CommunityFeedbackReply {
+  id               String                    @id @default(cuid())
+  threadId         String
+  authorUserId     String
+  helpfulActionType CommunityHelpfulActionType
+  comment          String?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+  thread           CommunityFeedbackThread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  authorUser       User                      @relation("CommunityFeedbackReplyAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+  items            CommunityFeedbackReplyItem[]
+  mirroredFeedbackItems FeedbackItem[]
+
+  @@index([threadId, createdAt])
+  @@index([authorUserId, createdAt])
+}
+
+model CommunityFeedbackReplyItem {
+  id        String                 @id @default(cuid())
+  replyId    String
+  category  FeedbackItemCategory
+  body      String
+  sortIndex Int                    @default(0)
+  createdAt DateTime               @default(now())
+  reply     CommunityFeedbackReply @relation(fields: [replyId], references: [id], onDelete: Cascade)
+
+  @@index([replyId, category, sortIndex])
+}
+
+model FeaturedCreator {
+  id        String   @id @default(cuid())
+  userId     String   @unique
+  sortIndex Int      @default(0)
+  reason    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([isActive, sortIndex])
 }

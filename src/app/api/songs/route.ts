@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { DemoVersionType } from "@prisma/client";
 import { z } from "zod";
 
 import { apiError, parseJsonBody, withApiHandler } from "@/lib/api";
+import { getIdentityProfile } from "@/lib/artist-growth";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
-import { canonicalizeSongStage } from "@/lib/song-stages";
-import { isReleaseSongStage } from "@/lib/songs-version-stage-map";
+import { serializeTrackListItem, trackListInclude } from "@/lib/track-workbench";
+import { createTrackCreatedAchievement } from "@/lib/community/achievements";
 
 const createTrackSchema = z.object({
   title: z.string().min(1).max(120),
@@ -16,142 +16,33 @@ const createTrackSchema = z.object({
   lyricsText: z.string().max(10000).optional().nullable()
 });
 
-function formatDateOnly(value: Date) {
-  return value.toISOString().slice(0, 10);
-}
-
-function isMissingDemoReleaseDateSelectError(error: unknown) {
-  if (!(error instanceof Error)) return false;
-  const message = error.message.toLowerCase();
-  return (
-    message.includes("model `demo`") &&
-    message.includes("releasedate") &&
-    message.includes("unknown field") &&
-    message.includes("select")
-  );
-}
-
-function serializeTrackWithReleaseMeta(rawTrack: any) {
-  const { demos, distributionRequest, ...track } = rawTrack;
-  const canonicalPathStage = track.pathStage ? canonicalizeSongStage(track.pathStage) : null;
-  const releaseDemo = Array.isArray(demos) && demos.length > 0 ? demos[0] : null;
-  const serializedDistributionRequest = distributionRequest
-    ? {
-        id: distributionRequest.id,
-        artistName: distributionRequest.artistName,
-        releaseTitle: distributionRequest.releaseTitle,
-        releaseDate: formatDateOnly(distributionRequest.releaseDate),
-        status: distributionRequest.status
-      }
-    : null;
-  const serializedReleaseDemo = releaseDemo
-    ? {
-        id: releaseDemo.id,
-        createdAt: releaseDemo.createdAt instanceof Date ? releaseDemo.createdAt.toISOString() : releaseDemo.createdAt,
-        releaseDate: releaseDemo.releaseDate ? formatDateOnly(releaseDemo.releaseDate) : null
-      }
-    : null;
-
-  const isLegacyRelease = canonicalPathStage?.name ? isReleaseSongStage(canonicalPathStage.name) : false;
-  let releaseArchiveMeta: Record<string, unknown> | null = null;
-  if (serializedDistributionRequest || serializedReleaseDemo || isLegacyRelease) {
-    const source = serializedDistributionRequest
-      ? "distribution_request"
-      : serializedReleaseDemo
-        ? "release_demo"
-        : "legacy_stage";
-    releaseArchiveMeta = {
-      source,
-      title: serializedDistributionRequest?.releaseTitle ?? track.title,
-      artistName: serializedDistributionRequest?.artistName ?? track.project?.artistLabel ?? null,
-      releaseDate: serializedDistributionRequest?.releaseDate ?? serializedReleaseDemo?.releaseDate ?? null,
-      releaseKind: track.project?.releaseKind ?? null,
-      coverType: track.project?.coverType ?? null,
-      coverImageUrl: track.project?.coverImageUrl ?? null,
-      coverPresetKey: track.project?.coverPresetKey ?? null,
-      coverColorA: track.project?.coverColorA ?? null,
-      coverColorB: track.project?.coverColorB ?? null,
-      isArchivedSingle: track.project?.releaseKind === "SINGLE"
-    };
-  }
-
-  return {
-    ...track,
-    pathStage: canonicalPathStage,
-    distributionRequest: serializedDistributionRequest,
-    releaseDemo: serializedReleaseDemo,
-    releaseArchiveMeta
-  };
-}
-
 export const GET = withApiHandler(async () => {
   const user = await requireUser();
-  let tracks: any[] = [];
-  try {
-    tracks = await prisma.track.findMany({
+  const [tracks, identityProfile, primaryGoal] = await Promise.all([
+    prisma.track.findMany({
       where: { userId: user.id },
-      include: {
-        folder: true,
-        project: true,
-        pathStage: true,
-        distributionRequest: {
-          select: {
-            id: true,
-            artistName: true,
-            releaseTitle: true,
-            releaseDate: true,
-            status: true
-          }
-        },
-        demos: {
-          where: { versionType: DemoVersionType.RELEASE },
-          orderBy: [{ sortIndex: "asc" }, { createdAt: "desc" }],
-          take: 1,
-          select: {
-            id: true,
-            createdAt: true,
-            releaseDate: true
-          }
-        },
-        _count: { select: { demos: true } }
-      } as any,
+      include: trackListInclude,
       orderBy: { updatedAt: "desc" }
-    } as any);
-  } catch (error) {
-    if (!isMissingDemoReleaseDateSelectError(error)) {
-      throw error;
-    }
-    tracks = await prisma.track.findMany({
-      where: { userId: user.id },
-      include: {
-        folder: true,
-        project: true,
-        pathStage: true,
-        distributionRequest: {
-          select: {
-            id: true,
-            artistName: true,
-            releaseTitle: true,
-            releaseDate: true,
-            status: true
-          }
-        },
-        demos: {
-          where: { versionType: DemoVersionType.RELEASE },
-          orderBy: [{ sortIndex: "asc" }, { createdAt: "desc" }],
-          take: 1,
-          select: {
-            id: true,
-            createdAt: true
-          }
-        },
-        _count: { select: { demos: true } }
-      } as any,
-      orderBy: { updatedAt: "desc" }
-    } as any);
-  }
+    }),
+    getIdentityProfile(prisma, user.id),
+    prisma.artistGoal.findFirst({
+      where: {
+        userId: user.id,
+        status: "ACTIVE",
+        isPrimary: true
+      },
+      select: { id: true }
+    })
+  ]);
 
-  return NextResponse.json(tracks.map(serializeTrackWithReleaseMeta));
+  return NextResponse.json(
+    tracks.map((track) =>
+      serializeTrackListItem(track, {
+        identityProfile,
+        primaryGoalId: primaryGoal?.id ?? null
+      })
+    )
+  );
 });
 
 export const POST = withApiHandler(async (request: Request) => {
@@ -218,22 +109,17 @@ export const POST = withApiHandler(async (request: Request) => {
       resolvedProjectId = createdProject.id;
     }
 
-    const createdTrack = await tx.track.create({
-      data: {
-        userId: user.id,
-        title: trimmedTitle,
-        lyricsText: body.lyricsText?.trim() || null,
+      const createdTrack = await tx.track.create({
+        data: {
+          userId: user.id,
+          title: trimmedTitle,
+          lyricsText: body.lyricsText?.trim() || null,
         folderId: resolvedFolderId,
         projectId: resolvedProjectId,
         pathStageId: body.pathStageId ?? null
       },
-      include: {
-        folder: true,
-        project: true,
-        pathStage: true,
-        _count: { select: { demos: true } }
-      }
-    });
+        include: trackListInclude
+      });
 
     if (resolvedProjectId) {
       await tx.project.update({
@@ -242,14 +128,32 @@ export const POST = withApiHandler(async (request: Request) => {
       });
     }
 
+    await createTrackCreatedAchievement(tx, {
+      userId: user.id,
+      trackId: createdTrack.id,
+      trackTitle: createdTrack.title
+    });
+
     return createdTrack;
   });
 
+  const [identityProfile, primaryGoal] = await Promise.all([
+    getIdentityProfile(prisma, user.id),
+    prisma.artistGoal.findFirst({
+      where: {
+        userId: user.id,
+        status: "ACTIVE",
+        isPrimary: true
+      },
+      select: { id: true }
+    })
+  ]);
+
   return NextResponse.json(
-    {
-      ...track,
-      pathStage: track.pathStage ? canonicalizeSongStage(track.pathStage) : null
-    },
+    serializeTrackListItem(track as any, {
+      identityProfile,
+      primaryGoalId: primaryGoal?.id ?? null
+    }),
     { status: 201 }
   );
 });

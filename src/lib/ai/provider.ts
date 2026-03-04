@@ -5,7 +5,16 @@ export type NavigationCandidateForAI = {
   specialistUserId: string;
   safeId: string;
   nickname: string;
-  category: "PRODUCER" | "AUDIO_ENGINEER" | "RECORDING_STUDIO" | "PROMO_CREW";
+  category:
+    | "PRODUCER"
+    | "AUDIO_ENGINEER"
+    | "RECORDING_STUDIO"
+    | "PROMO_CREW"
+    | "COVER_ARTIST"
+    | "COVER_PHOTOGRAPHER"
+    | "VIDEOGRAPHER"
+    | "CLIP_PRODUCTION_TEAM"
+    | "DESIGNER";
   city?: string | null;
   isOnline: boolean;
   isAvailableNow: boolean;
@@ -77,4 +86,3 @@ export function getStructuredAiProvider(): StructuredAiProvider {
       return cachedProvider;
   }
 }
-

@@ -133,7 +133,7 @@ export function AudioWaveformPlayer({ src, className = "", barCount = 120, loopR
     const barWidth = width / peaks.length;
 
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "#101114";
+    ctx.fillStyle = "#eef4e6";
     ctx.fillRect(0, 0, width, height);
 
     for (let i = 0; i < peaks.length; i += 1) {
@@ -143,12 +143,12 @@ export function AudioWaveformPlayer({ src, className = "", barCount = 120, loopR
       const y = midY - barHeight / 2;
 
       const ratio = i / peaks.length;
-      ctx.fillStyle = ratio <= progress ? "#ffffff" : "rgba(255,255,255,0.35)";
+      ctx.fillStyle = ratio <= progress ? "#2A342C" : "rgba(42,52,44,0.28)";
       ctx.fillRect(x, y, Math.max(1, barWidth * 0.72), barHeight);
     }
 
     const markerX = progress * width;
-    ctx.fillStyle = "#ffe900";
+    ctx.fillStyle = "#6f9f7b";
     ctx.globalAlpha = 0.95;
     ctx.fillRect(markerX, 0, Math.max(2, barWidth * 0.8), height);
     ctx.globalAlpha = 1;
@@ -156,9 +156,9 @@ export function AudioWaveformPlayer({ src, className = "", barCount = 120, loopR
       const left = (normalizedLoopRange.start / 100) * width;
       const right = (normalizedLoopRange.end / 100) * width;
       const loopWidth = Math.max(2, right - left);
-      ctx.fillStyle = "rgba(231,240,74,0.16)";
+      ctx.fillStyle = "rgba(111,159,123,0.14)";
       ctx.fillRect(left, 0, loopWidth, height);
-      ctx.strokeStyle = "rgba(42,52,44,0.38)";
+      ctx.strokeStyle = "rgba(42,52,44,0.28)";
       ctx.lineWidth = Math.max(1, dpr);
       ctx.setLineDash([4 * dpr, 3 * dpr]);
       ctx.beginPath();
@@ -232,23 +232,23 @@ export function AudioWaveformPlayer({ src, className = "", barCount = 120, loopR
         <Button
           type="button"
           variant="secondary"
-          className="shrink-0 border-white/10 bg-[#141519] text-white hover:bg-white/10"
+          className="shrink-0 border-brand-border bg-white/95 text-brand-ink hover:bg-white"
           onClick={togglePlayback}
         >
           {playing ? "Пауза" : "Слушать"}
         </Button>
-        <div className="relative min-w-0 flex-1 overflow-hidden rounded-md border border-white/10 bg-[#101114]">
-          <canvas ref={canvasRef} onClick={seekTo} className="h-16 w-full cursor-pointer bg-[#101114]" />
-          {loading && <div className="pointer-events-none absolute inset-0 animate-pulse bg-white/5" />}
+        <div className="relative min-w-0 flex-1 overflow-hidden rounded-xl border border-brand-border bg-[#eef4e6]">
+          <canvas ref={canvasRef} onClick={seekTo} className="h-16 w-full cursor-pointer bg-[#eef4e6]" />
+          {loading && <div className="pointer-events-none absolute inset-0 animate-pulse bg-[#2A342C]/5" />}
         </div>
       </div>
 
-      <div className="flex min-w-0 items-center justify-between gap-3 text-xs text-white/45">
+      <div className="flex min-w-0 items-center justify-between gap-3 text-xs text-brand-muted">
         <span>{formatTime(currentTime)}</span>
         <span>{formatTime(duration)}</span>
       </div>
 
-      {error && <p className="text-xs text-white/45">{error}</p>}
+      {error && <p className="text-xs text-brand-muted">{error}</p>}
 
       <audio
         ref={audioRef}

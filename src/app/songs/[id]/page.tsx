@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -8,14 +8,18 @@ import { ArrowLeft, AudioLines, FolderOpen, MoreHorizontal, PlusCircle, RefreshC
 
 import { AudioWaveformPlayer } from "@/components/audio/audio-waveform-player";
 import { MultiTrackRecorder } from "@/components/audio/multi-track-recorder";
+import { LearnContextCard, type LearnContextCardAction } from "@/components/learn/learn-context-card";
+import { RecommendationCard } from "@/components/recommendations/recommendation-card";
 import { PlaybackIcon } from "@/components/songs/playback-icon";
 import { SongAnalysisBadges } from "@/components/songs/song-analysis-badges";
 import { useSongsPlayback } from "@/components/songs/songs-playback-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast";
 import {
   distributionDistributorOptions,
   distributionRequestStatusLabel,
@@ -25,10 +29,15 @@ import {
   type TrackDistributionRequestDto,
   type TrackDistributionRequestPayload
 } from "@/lib/distribution-request";
+import type { RecommendationSource } from "@/contracts/recommendations";
 import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
 import { appendAudioAnalysisToFormData, detectAudioAnalysisMvp } from "@/lib/audio/upload-analysis-client";
+import { buildRecommendationCard } from "@/lib/recommendations";
 import { buildProjectCoverStyle } from "@/lib/project-cover-style";
+import { fetchLearnContext, postLearnProgress } from "@/lib/learn/client";
+import type { LearnContextBlock } from "@/lib/learn/types";
 import { isPlayableDemo, pickPreferredPlaybackDemo, playbackAccentButtonStyle } from "@/lib/songs-playback-helpers";
+import type { IdentityBridgeStatus, TrackIdentityBridge } from "@/lib/id-integration";
 
 type PathStage = {
   id: number;
@@ -50,6 +59,14 @@ type Demo = {
   detectedKeyRoot?: string | null;
   detectedKeyMode?: string | null;
   sortIndex?: number;
+  versionReflection?: {
+    whyMade: string | null;
+    whatChanged: string | null;
+    whatNotWorking: string | null;
+    legacyNote: string | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+  } | null;
 };
 
 type FolderRef = {
@@ -94,7 +111,57 @@ type Track = {
   primaryDemo?: Demo | null;
   pathStageId: number | null;
   pathStage?: PathStage | null;
+  workbenchState: "IN_PROGRESS" | "STUCK" | "NEEDS_FEEDBACK" | "DEFERRED" | "READY_FOR_NEXT_STEP";
+  workbenchStateLabel: string;
+  trackIntent?: {
+    summary: string;
+    whyNow: string | null;
+  } | null;
+  activeNextStep?: {
+    id: string;
+    text: string;
+    reason: string | null;
+    status: "ACTIVE" | "DONE" | "CANCELED";
+    source: RecommendationSource;
+    origin: "SONG_DETAIL" | "MORNING_FOCUS" | "WRAP_UP";
+  } | null;
+  nextSteps: Array<{
+    id: string;
+    text: string;
+    reason: string | null;
+    status: "ACTIVE" | "DONE" | "CANCELED";
+    source: RecommendationSource;
+    origin: "SONG_DETAIL" | "MORNING_FOCUS" | "WRAP_UP";
+    completedAt: string | null;
+    canceledAt: string | null;
+    createdAt: string | null;
+    updatedAt: string | null;
+  }>;
+  latestWrapUp?: {
+    id: string;
+    trackId: string;
+    endState: string;
+    endStateLabel: string;
+    whatChanged: string;
+    whatNotWorking: string | null;
+    nextStep?: {
+      id: string;
+      text: string;
+      reason: string | null;
+      status: string;
+      source: RecommendationSource;
+      origin: "SONG_DETAIL" | "MORNING_FOCUS" | "WRAP_UP";
+    } | null;
+  } | null;
+  feedbackSummary: TrackFeedbackSummary;
+  identityBridge: TrackIdentityBridge;
   demos: Demo[];
+};
+
+type ReflectionDraft = {
+  whyMade: string;
+  whatChanged: string;
+  whatNotWorking: string;
 };
 
 type SongPathStepType = DemoVersionType | "RELEASE";
@@ -107,9 +174,110 @@ type SongPathStepView = {
 };
 
 type DistributionFormState = TrackDistributionRequestPayload;
+type FeedbackRequestType = "TEXT" | "DEMO" | "ARRANGEMENT" | "GENERAL_IMPRESSION";
+type FeedbackRequestStatus = "PENDING" | "RECEIVED" | "REVIEWED";
+type FeedbackRecipientMode = "INTERNAL_USER" | "EXTERNAL_CONTACT" | "COMMUNITY";
+type FeedbackItemCategory = "WHAT_WORKS" | "NOT_READING" | "SAGS" | "WANT_TO_HEAR_NEXT";
+type FeedbackResolutionStatus = "ACCEPTED" | "REJECTED" | "NEXT_VERSION";
+type ArtistSupportNeedType = "FEEDBACK" | "ACCOUNTABILITY" | "CREATIVE_DIRECTION" | "COLLABORATION";
+
+type TrackFeedbackSummary = {
+  latestStatus: FeedbackRequestStatus | null;
+  latestStatusLabel: string | null;
+  openRequestCount: number;
+  pendingRequestCount: number;
+  unresolvedItemsCount: number;
+  nextVersionItemsCount: number;
+  latestReceivedAt: string | null;
+  latestReviewedAt: string | null;
+};
+
+type FeedbackDemoRef = {
+  id: string;
+  versionType: DemoVersionType;
+  createdAt: string;
+  releaseDate: string | null;
+};
+
+type FeedbackResolution = {
+  id: string;
+  status: FeedbackResolutionStatus;
+  statusLabel: string;
+  note: string | null;
+  resolvedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  targetDemo: FeedbackDemoRef | null;
+};
+
+type FeedbackItem = {
+  id: string;
+  category: FeedbackItemCategory;
+  categoryLabel: string;
+  body: string;
+  source: string;
+  author?: {
+    userId: string;
+    safeId: string;
+    nickname: string;
+  } | null;
+  sortIndex: number;
+  createdAt: string;
+  updatedAt: string;
+  resolution: FeedbackResolution | null;
+};
+
+type FeedbackRequest = {
+  id: string;
+  trackId: string;
+  demoId: string | null;
+  type: FeedbackRequestType;
+  typeLabel: string;
+  status: FeedbackRequestStatus;
+  statusLabel: string;
+  recipient: {
+    mode: FeedbackRecipientMode;
+    label: string;
+    safeId: string | null;
+    nickname: string | null;
+    channel: string | null;
+    contact: string | null;
+  };
+  requestMessage: string | null;
+  lyricsSnapshot: string | null;
+  sentAt: string;
+  receivedAt: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  demoRef: FeedbackDemoRef | null;
+  community?: {
+    postId: string;
+    threadId: string;
+    postKind: "FEEDBACK_REQUEST";
+    title: string | null;
+    helpfulActionPrompt: string | null;
+    supportNeedTypes: ArtistSupportNeedType[];
+    status: "OPEN" | "CLOSED" | "ARCHIVED";
+    replyCount: number;
+  } | null;
+  items: FeedbackItem[];
+  counts: {
+    totalItems: number;
+    resolvedItems: number;
+    nextVersionItems: number;
+  };
+};
+
+type FeedbackResponseDraft = {
+  whatWorks: string;
+  notReading: string;
+  sags: string;
+  wantToHearNext: string;
+};
 
 const versionTypeLabels: Record<DemoVersionType, string> = {
-  IDEA_TEXT: "Идея (текст)",
+  IDEA_TEXT: "Идея",
   DEMO: "Демо",
   ARRANGEMENT: "Продакшн",
   NO_MIX: "Запись без сведения",
@@ -119,6 +287,24 @@ const versionTypeLabels: Record<DemoVersionType, string> = {
 };
 
 const pathVersionOrder: DemoVersionType[] = ["IDEA_TEXT", "DEMO", "ARRANGEMENT", "NO_MIX", "MIXED", "MASTERED"];
+const feedbackTypeOptions: Array<{ value: FeedbackRequestType; label: string }> = [
+  { value: "TEXT", label: "По тексту" },
+  { value: "DEMO", label: "По демо" },
+  { value: "ARRANGEMENT", label: "По аранжировке" },
+  { value: "GENERAL_IMPRESSION", label: "По общему впечатлению" }
+];
+const feedbackCategoryOrder: FeedbackItemCategory[] = [
+  "WHAT_WORKS",
+  "NOT_READING",
+  "SAGS",
+  "WANT_TO_HEAR_NEXT"
+];
+const supportNeedTypeLabels: Record<ArtistSupportNeedType, string> = {
+  FEEDBACK: "Нужен фидбек",
+  ACCOUNTABILITY: "Нужна поддержка",
+  CREATIVE_DIRECTION: "Нужен direction",
+  COLLABORATION: "Ищу коллаб"
+};
 
 function normalizeStageName(name: string) {
   return name.toLowerCase().replace(/\s+/g, " ").trim();
@@ -200,6 +386,73 @@ function versionBadgeClass(versionType: DemoVersionType) {
   return `${palette.border} ${palette.bg} ${palette.text}`;
 }
 
+function workbenchBadgeClass(state: Track["workbenchState"]) {
+  switch (state) {
+    case "STUCK":
+      return "border-amber-300/70 bg-amber-50 text-amber-900";
+    case "NEEDS_FEEDBACK":
+      return "border-sky-300/70 bg-sky-50 text-sky-900";
+    case "DEFERRED":
+      return "border-stone-300/70 bg-stone-100 text-stone-700";
+    case "READY_FOR_NEXT_STEP":
+      return "border-emerald-300/70 bg-emerald-50 text-emerald-900";
+    default:
+      return "border-lime-300/70 bg-lime-50 text-lime-900";
+  }
+}
+
+function feedbackStatusBadgeClass(status: FeedbackRequestStatus) {
+  switch (status) {
+    case "PENDING":
+      return "border-sky-300/70 bg-sky-50 text-sky-900";
+    case "RECEIVED":
+      return "border-amber-300/70 bg-amber-50 text-amber-900";
+    case "REVIEWED":
+      return "border-emerald-300/70 bg-emerald-50 text-emerald-900";
+    default:
+      return "border-brand-border bg-white text-brand-ink";
+  }
+}
+
+function feedbackResolutionBadgeClass(status: FeedbackResolutionStatus) {
+  switch (status) {
+    case "ACCEPTED":
+      return "border-emerald-300/70 bg-emerald-50 text-emerald-900";
+    case "REJECTED":
+      return "border-stone-300/70 bg-stone-100 text-stone-700";
+    case "NEXT_VERSION":
+      return "border-sky-300/70 bg-sky-50 text-sky-900";
+    default:
+      return "border-brand-border bg-white text-brand-ink";
+  }
+}
+
+function identityBridgeBadgeClass(status: IdentityBridgeStatus) {
+  switch (status) {
+    case "STRONG":
+      return "border-emerald-300/70 bg-emerald-50 text-emerald-900";
+    case "PARTIAL":
+      return "border-sky-300/70 bg-sky-50 text-sky-900";
+    case "WEAK":
+      return "border-amber-300/70 bg-amber-50 text-amber-900";
+    default:
+      return "border-stone-300/70 bg-stone-100 text-stone-700";
+  }
+}
+
+function identityBridgeLabel(status: IdentityBridgeStatus) {
+  switch (status) {
+    case "STRONG":
+      return "Сильная связь";
+    case "PARTIAL":
+      return "Частичная связь";
+    case "WEAK":
+      return "Слабая связь";
+    default:
+      return "Связь не собрана";
+  }
+}
+
 async function getAudioDurationSeconds(file: File): Promise<number> {
   return new Promise((resolve) => {
     const audio = document.createElement("audio");
@@ -239,16 +492,45 @@ function emptyDistributionForm(): DistributionFormState {
   };
 }
 
+function emptyFeedbackResponseDraft(): FeedbackResponseDraft {
+  return {
+    whatWorks: "",
+    notReading: "",
+    sags: "",
+    wantToHearNext: ""
+  };
+}
+
+function splitFeedbackLines(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 export default function SongDetailPage({ params }: { params: { id: string } }) {
   const router = useRouter();
+  const toast = useToast();
   const searchParams = useSearchParams();
   const { data: track, refetch } = useQuery({
     queryKey: ["song-track", params.id],
     queryFn: () => fetcher<Track>(`/api/songs/${params.id}`)
   });
+  const { data: learnBlock, refetch: refetchLearnBlock } = useQuery<LearnContextBlock>({
+    queryKey: ["song-track-learn", params.id],
+    queryFn: () =>
+      fetchLearnContext({
+        surface: "SONGS",
+        trackId: params.id
+      })
+  });
   const { data: distributionRequest, refetch: refetchDistributionRequest } = useQuery({
     queryKey: ["song-distribution-request", params.id],
     queryFn: () => fetcher<TrackDistributionRequestDto | null>(`/api/songs/${params.id}/distribution-request`)
+  });
+  const { data: feedbackData, refetch: refetchFeedback } = useQuery({
+    queryKey: ["song-track-feedback", params.id],
+    queryFn: () => fetcher<{ items: FeedbackRequest[] }>(`/api/songs/${params.id}/feedback-requests`)
   });
   const { data: stages } = useQuery({
     queryKey: ["song-track-stages"],
@@ -258,6 +540,9 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
 
   const [title, setTitle] = useState("");
   const [stageId, setStageId] = useState("");
+  const [workbenchState, setWorkbenchState] = useState<Track["workbenchState"]>("IN_PROGRESS");
+  const [intentSummary, setIntentSummary] = useState("");
+  const [intentWhyNow, setIntentWhyNow] = useState("");
   const [savingMeta, setSavingMeta] = useState(false);
   const [deletingTrack, setDeletingTrack] = useState(false);
   const [pageError, setPageError] = useState("");
@@ -265,16 +550,38 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
   const [showEditTrackModal, setShowEditTrackModal] = useState(false);
   const [showAddVersionModal, setShowAddVersionModal] = useState(false);
   const [showDistributionModal, setShowDistributionModal] = useState(false);
+  const [showCreateFeedbackModal, setShowCreateFeedbackModal] = useState(false);
   const [showAddVersionQuickActions, setShowAddVersionQuickActions] = useState(false);
   const [distributionForm, setDistributionForm] = useState<DistributionFormState>(() => emptyDistributionForm());
   const [distributionError, setDistributionError] = useState("");
   const [submittingDistribution, setSubmittingDistribution] = useState(false);
+  const [feedbackRequestType, setFeedbackRequestType] = useState<FeedbackRequestType>("DEMO");
+  const [feedbackRecipientMode, setFeedbackRecipientMode] = useState<FeedbackRecipientMode>("EXTERNAL_CONTACT");
+  const [feedbackRecipientSafeId, setFeedbackRecipientSafeId] = useState("");
+  const [feedbackRecipientLabel, setFeedbackRecipientLabel] = useState("");
+  const [feedbackRecipientChannel, setFeedbackRecipientChannel] = useState("");
+  const [feedbackRecipientContact, setFeedbackRecipientContact] = useState("");
+  const [feedbackCommunityTitle, setFeedbackCommunityTitle] = useState("");
+  const [feedbackCommunityHelpfulActionPrompt, setFeedbackCommunityHelpfulActionPrompt] = useState("");
+  const [feedbackSupportNeedTypes, setFeedbackSupportNeedTypes] = useState<ArtistSupportNeedType[]>(["FEEDBACK"]);
+  const [feedbackRequestMessage, setFeedbackRequestMessage] = useState("");
+  const [feedbackRequestDemoId, setFeedbackRequestDemoId] = useState("");
+  const [creatingFeedbackRequest, setCreatingFeedbackRequest] = useState(false);
+  const [feedbackRequestError, setFeedbackRequestError] = useState("");
+  const [expandedFeedbackRequests, setExpandedFeedbackRequests] = useState<Record<string, boolean>>({});
+  const [responseModalRequestId, setResponseModalRequestId] = useState("");
+  const [feedbackResponseDrafts, setFeedbackResponseDrafts] = useState<Record<string, FeedbackResponseDraft>>({});
+  const [submittingFeedbackResponseId, setSubmittingFeedbackResponseId] = useState("");
+  const [feedbackResolutionNotes, setFeedbackResolutionNotes] = useState<Record<string, string>>({});
+  const [resolvingFeedbackItemId, setResolvingFeedbackItemId] = useState("");
 
   const [newVersionType, setNewVersionType] = useState<DemoVersionType>("DEMO");
   const [newVersionMode, setNewVersionMode] = useState<"upload" | "record">("upload");
   const [newVersionText, setNewVersionText] = useState("");
-  const [newVersionComment, setNewVersionComment] = useState("");
-  const [editingNewVersionComment, setEditingNewVersionComment] = useState(false);
+  const [newVersionWhyMade, setNewVersionWhyMade] = useState("");
+  const [newVersionWhatChanged, setNewVersionWhatChanged] = useState("");
+  const [newVersionWhatNotWorking, setNewVersionWhatNotWorking] = useState("");
+  const [selectedFeedbackItemIdsForVersion, setSelectedFeedbackItemIdsForVersion] = useState<string[]>([]);
   const [newVersionFile, setNewVersionFile] = useState<File | null>(null);
   const [newReleaseDate, setNewReleaseDate] = useState("");
   const [creatingVersion, setCreatingVersion] = useState(false);
@@ -287,13 +594,78 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
   const [recorderResetKey, setRecorderResetKey] = useState(0);
 
   const [updatingDemoId, setUpdatingDemoId] = useState("");
-  const [demoNotes, setDemoNotes] = useState<Record<string, string>>({});
-  const [editingCommentId, setEditingCommentId] = useState("");
+  const [demoReflectionDrafts, setDemoReflectionDrafts] = useState<Record<string, ReflectionDraft>>({});
+  const [editingReflectionId, setEditingReflectionId] = useState("");
   const [savingPrimaryDemoId, setSavingPrimaryDemoId] = useState("");
   const [reorderingStepVersionType, setReorderingStepVersionType] = useState<DemoVersionType | "">("");
+  const [moveTrackPrompt, setMoveTrackPrompt] = useState<{ total: number; currentIndex: number; value: string } | null>(null);
+  const [movingTrackInProject, setMovingTrackInProject] = useState(false);
+  const [nextStepTitle, setNextStepTitle] = useState("");
+  const [nextStepDetail, setNextStepDetail] = useState("");
+  const [savingNextStep, setSavingNextStep] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const playback = useSongsPlayback();
+
+  function buildTrackNextStepRecommendation(step: NonNullable<Track["activeNextStep"]>) {
+    return buildRecommendationCard({
+      key: `songs:next-step:${step.id}`,
+      surface: "SONGS",
+      kind: "NEXT_STEP",
+      source: step.source,
+      title: "Следующий шаг",
+      text: step.text,
+      reason: step.reason,
+      primaryAction: null,
+      secondaryActions: [],
+      entityRef: {
+        type: "track_next_step",
+        id: step.id
+      },
+      futureAiSlotKey: step.id
+    });
+  }
+
+  async function handleLearnAction(materialSlug: string, action: LearnContextCardAction) {
+    try {
+      if (action.kind === "APPLY_TO_TRACK") {
+        await postLearnProgress(materialSlug, {
+          action: "APPLY",
+          surface: "SONGS",
+          targetType: "TRACK",
+          targetId: action.targetId,
+          recommendationContext: action.recommendationContext
+        });
+        toast.success("Материал привязан к треку.");
+      } else if (action.kind === "APPLY_TO_GOAL") {
+        await postLearnProgress(materialSlug, {
+          action: "APPLY",
+          surface: "SONGS",
+          targetType: "GOAL",
+          targetId: action.targetId,
+          recommendationContext: action.recommendationContext
+        });
+        toast.success("Материал привязан к цели.");
+      } else if (action.kind === "NOT_RELEVANT") {
+        await postLearnProgress(materialSlug, {
+          action: "NOT_RELEVANT",
+          surface: "SONGS",
+          recommendationContext: action.recommendationContext
+        });
+        toast.info("Материал скрыт из контекстной выдачи.");
+      } else {
+        await postLearnProgress(materialSlug, {
+          action: "LATER",
+          surface: "SONGS",
+          recommendationContext: action.recommendationContext
+        });
+        toast.info("Материал отложен на потом.");
+      }
+      await refetchLearnBlock();
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Не удалось обновить Learn-материал.");
+    }
+  }
 
   useEffect(() => {
     if (newVersionType !== "DEMO" && newVersionMode === "record") {
@@ -318,6 +690,14 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
   useEffect(() => {
     setLyricsText(track?.lyricsText ?? "");
   }, [track?.lyricsText]);
+
+  useEffect(() => {
+    setWorkbenchState(track?.workbenchState ?? "IN_PROGRESS");
+    setIntentSummary(track?.trackIntent?.summary ?? "");
+    setIntentWhyNow(track?.trackIntent?.whyNow ?? "");
+    setNextStepTitle(track?.activeNextStep?.text ?? "");
+    setNextStepDetail(track?.activeNextStep?.reason ?? "");
+  }, [track?.activeNextStep?.reason, track?.activeNextStep?.text, track?.trackIntent?.summary, track?.trackIntent?.whyNow, track?.workbenchState]);
 
   useEffect(() => {
     const shouldShowLyrics = searchParams.get("showLyrics") === "1";
@@ -360,7 +740,8 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
     setNewReleaseDate((prev) => prev || distributionRequest?.releaseDate || "");
   }, [distributionRequest?.releaseDate, newVersionType, showAddVersionModal]);
 
-  const trackDemos = track?.demos ?? [];
+  const trackDemos = useMemo(() => track?.demos ?? [], [track?.demos]);
+  const feedbackRequests = useMemo(() => feedbackData?.items ?? [], [feedbackData?.items]);
   const parentProject = track?.project ?? null;
   const isSingleProject = parentProject?.releaseKind === "SINGLE";
   const backHref = parentProject
@@ -381,6 +762,19 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
   );
   const hasReleaseDemo = Boolean(existingReleaseDemo);
   const hasMasteredVersion = Boolean(latestMasteredDemo);
+  const feedbackSelectableDemos = useMemo(
+    () => trackDemos.filter((demo) => demo.versionType !== "IDEA_TEXT"),
+    [trackDemos]
+  );
+  useEffect(() => {
+    if (feedbackRequestType === "TEXT") {
+      setFeedbackRequestDemoId("");
+      return;
+    }
+
+    if (feedbackSelectableDemos.some((demo) => demo.id === feedbackRequestDemoId)) return;
+    setFeedbackRequestDemoId(feedbackSelectableDemos[0]?.id ?? "");
+  }, [feedbackRequestDemoId, feedbackRequestType, feedbackSelectableDemos]);
   const projectPlayAccentStyle = playbackAccentButtonStyle({
     colorA: parentProject?.coverColorA ?? null,
     colorB: parentProject?.coverColorB ?? null
@@ -445,6 +839,56 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
       }
     ];
   }, [trackDemos, versionsByPathStep, visibleStages]);
+  const responseModalRequest = useMemo(
+    () => feedbackRequests.find((item) => item.id === responseModalRequestId) ?? null,
+    [feedbackRequests, responseModalRequestId]
+  );
+  const pendingNextVersionItems = useMemo(
+    () =>
+      feedbackRequests.flatMap((request) =>
+        request.items
+          .filter((item) => item.resolution?.status === "NEXT_VERSION" && !item.resolution.targetDemo)
+          .map((item) => ({
+            requestId: request.id,
+            requestStatus: request.status,
+            requestTypeLabel: request.typeLabel,
+            item
+          }))
+      ),
+    [feedbackRequests]
+  );
+  const demoPlaybackItem = useCallback(
+    (demo: Demo) => {
+      const currentTrack = track;
+      if (!currentTrack) return null;
+      if (!isPlayableDemo(demo)) return null;
+      const coverType: "image" | "gradient" = parentProject?.coverType === "IMAGE" ? "image" : "gradient";
+      return {
+        demoId: demo.id,
+        src: `/api/audio-clips/${demo.id}/stream`,
+        title: currentTrack.title,
+        subtitle: `${parentProject?.title || "Без проекта"} • ${versionTypeLabels[demo.versionType]}`,
+        linkHref: `/songs/${currentTrack.id}`,
+        durationSec: demo.duration,
+        trackId: currentTrack.id,
+        projectId: parentProject?.id ?? null,
+        versionType: demo.versionType,
+        queueGroupType: "track" as const,
+        queueGroupId: currentTrack.id,
+        cover: {
+          type: coverType,
+          imageUrl: parentProject?.coverImageUrl ?? null,
+          colorA: parentProject?.coverColorA ?? null,
+          colorB: parentProject?.coverColorB ?? null
+        },
+        meta: {
+          projectTitle: parentProject?.title ?? undefined,
+          pathStageName: track.pathStage?.name ?? undefined
+        }
+      };
+    },
+    [parentProject, track]
+  );
   const songPlaybackQueue = useMemo(() => {
     if (!track) return [] as NonNullable<ReturnType<typeof demoPlaybackItem>>[];
     const items: NonNullable<ReturnType<typeof demoPlaybackItem>>[] = [];
@@ -453,7 +897,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
       if (item) items.push(item);
     }
     return items;
-  }, [parentProject, track, versionsByPathStep]);
+  }, [demoPlaybackItem, track, versionsByPathStep]);
 
   if (!track) {
     return <p className="text-sm text-brand-muted">Загрузка трека...</p>;
@@ -469,8 +913,10 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
     setNewVersionType("DEMO");
     setNewVersionMode("upload");
     setNewVersionText("");
-    setNewVersionComment("");
-    setEditingNewVersionComment(false);
+    setNewVersionWhyMade("");
+    setNewVersionWhatChanged("");
+    setNewVersionWhatNotWorking("");
+    setSelectedFeedbackItemIdsForVersion([]);
     setNewVersionFile(null);
     setNewReleaseDate("");
     setVersionError("");
@@ -478,6 +924,178 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
     setRecorderResetKey((prev) => prev + 1);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
+    }
+  }
+
+  function resetFeedbackRequestForm() {
+    setFeedbackRequestType("DEMO");
+    setFeedbackRecipientMode("EXTERNAL_CONTACT");
+    setFeedbackRecipientSafeId("");
+    setFeedbackRecipientLabel("");
+    setFeedbackRecipientChannel("");
+    setFeedbackRecipientContact("");
+    setFeedbackCommunityTitle("");
+    setFeedbackCommunityHelpfulActionPrompt("");
+    setFeedbackSupportNeedTypes(["FEEDBACK"]);
+    setFeedbackRequestMessage("");
+    setFeedbackRequestDemoId("");
+    setFeedbackRequestError("");
+  }
+
+  function getReflectionDraft(demo: Demo): ReflectionDraft {
+    return (
+      demoReflectionDrafts[demo.id] ?? {
+        whyMade: demo.versionReflection?.whyMade ?? "",
+        whatChanged: demo.versionReflection?.whatChanged ?? "",
+        whatNotWorking: demo.versionReflection?.whatNotWorking ?? ""
+      }
+    );
+  }
+
+  function getFeedbackResponseDraft(requestId: string): FeedbackResponseDraft {
+    return feedbackResponseDrafts[requestId] ?? emptyFeedbackResponseDraft();
+  }
+
+  function openFeedbackResponseModal(requestId: string) {
+    setFeedbackResponseDrafts((prev) => ({
+      ...prev,
+      [requestId]: prev[requestId] ?? emptyFeedbackResponseDraft()
+    }));
+    setResponseModalRequestId(requestId);
+  }
+
+  async function submitFeedbackRequest() {
+    setCreatingFeedbackRequest(true);
+    setFeedbackRequestError("");
+    try {
+      const payload = {
+        type: feedbackRequestType,
+        demoId: feedbackRequestType === "TEXT" ? undefined : feedbackRequestDemoId || undefined,
+        recipientMode: feedbackRecipientMode,
+        recipientSafeId: feedbackRecipientMode === "INTERNAL_USER" ? feedbackRecipientSafeId.trim() || undefined : undefined,
+        recipientLabel: feedbackRecipientMode === "EXTERNAL_CONTACT" ? feedbackRecipientLabel.trim() || undefined : undefined,
+        recipientChannel: feedbackRecipientMode === "EXTERNAL_CONTACT" ? feedbackRecipientChannel.trim() || null : null,
+        recipientContact: feedbackRecipientMode === "EXTERNAL_CONTACT" ? feedbackRecipientContact.trim() || null : null,
+        requestMessage: feedbackRequestMessage.trim() || null,
+        communityTitle: feedbackRecipientMode === "COMMUNITY" ? feedbackCommunityTitle.trim() || undefined : undefined,
+        communityHelpfulActionPrompt:
+          feedbackRecipientMode === "COMMUNITY" ? feedbackCommunityHelpfulActionPrompt.trim() || null : null,
+        supportNeedTypes: feedbackRecipientMode === "COMMUNITY" ? feedbackSupportNeedTypes : undefined
+      };
+
+      const response = await apiFetch(`/api/songs/${currentTrackId}/feedback-requests`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Не удалось создать запрос на фидбек.");
+      }
+
+      await Promise.all([refetch(), refetchFeedback()]);
+      resetFeedbackRequestForm();
+      setShowCreateFeedbackModal(false);
+      toast.success("Запрос на фидбек сохранён.");
+    } catch (error) {
+      setFeedbackRequestError(error instanceof Error ? error.message : "Не удалось создать запрос на фидбек.");
+    } finally {
+      setCreatingFeedbackRequest(false);
+    }
+  }
+
+  async function submitFeedbackResponse(requestId: string) {
+    const draft = getFeedbackResponseDraft(requestId);
+
+    setSubmittingFeedbackResponseId(requestId);
+    setPageError("");
+    try {
+      const response = await apiFetch(`/api/songs/${currentTrackId}/feedback-requests/${requestId}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sections: {
+            whatWorks: splitFeedbackLines(draft.whatWorks),
+            notReading: splitFeedbackLines(draft.notReading),
+            sags: splitFeedbackLines(draft.sags),
+            wantToHearNext: splitFeedbackLines(draft.wantToHearNext)
+          }
+        })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Не удалось сохранить ответ на фидбек.");
+      }
+
+      await Promise.all([refetch(), refetchFeedback()]);
+      setFeedbackResponseDrafts((prev) => ({ ...prev, [requestId]: emptyFeedbackResponseDraft() }));
+      setExpandedFeedbackRequests((prev) => ({ ...prev, [requestId]: true }));
+      setResponseModalRequestId("");
+      toast.success("Ответ на фидбек сохранён.");
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Не удалось сохранить ответ на фидбек.");
+    } finally {
+      setSubmittingFeedbackResponseId("");
+    }
+  }
+
+  async function resolveFeedbackItem(itemId: string, status: FeedbackResolutionStatus) {
+    setResolvingFeedbackItemId(itemId);
+    setPageError("");
+    try {
+      const note = feedbackResolutionNotes[itemId]?.trim() || null;
+      const response = await apiFetch(`/api/songs/${currentTrackId}/feedback-items/${itemId}/resolution`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status,
+          note,
+          targetDemoId: null
+        })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Не удалось сохранить решение по фидбеку.");
+      }
+
+      await Promise.all([refetch(), refetchFeedback()]);
+      toast.success("Решение по фидбеку сохранено.");
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Не удалось сохранить решение по фидбеку.");
+    } finally {
+      setResolvingFeedbackItemId("");
+    }
+  }
+
+  async function saveTrackNextStep() {
+    const trimmedTitle = nextStepTitle.trim();
+    if (!trimmedTitle) {
+      setPageError("Укажи следующий шаг по треку.");
+      return;
+    }
+
+    setSavingNextStep(true);
+    setPageError("");
+    try {
+      const response = await apiFetch(`/api/songs/${currentTrackId}/next-steps`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: trimmedTitle,
+          reason: nextStepDetail.trim() || null,
+          replaceCurrent: true
+        })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Не удалось сохранить следующий шаг.");
+      }
+      await refetch();
+      toast.success("Следующий шаг обновлён.");
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Не удалось сохранить следующий шаг.");
+    } finally {
+      setSavingNextStep(false);
     }
   }
 
@@ -644,7 +1262,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
 
       if (newVersionType === "IDEA_TEXT") {
         if (!newVersionText.trim()) {
-          setVersionError("Для типа «Идея (текст)» добавь текст песни.");
+          setVersionError("Для типа «Идея» добавь текст песни.");
           return;
         }
         const response = await apiFetch(`/api/songs/${currentTrackId}`, {
@@ -696,8 +1314,14 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
       formData.append("file", fileToUpload, filename);
       formData.append("durationSec", String(durationSec));
       formData.append("trackId", currentTrackId);
-      formData.append("noteText", newVersionComment.trim());
+      formData.append("noteText", newVersionWhatChanged.trim());
+      formData.append("reflectionWhyMade", newVersionWhyMade.trim());
+      formData.append("reflectionWhatChanged", newVersionWhatChanged.trim());
+      formData.append("reflectionWhatNotWorking", newVersionWhatNotWorking.trim());
       formData.append("versionType", newVersionType);
+      for (const feedbackItemId of selectedFeedbackItemIdsForVersion) {
+        formData.append("feedbackItemIds", feedbackItemId);
+      }
       if (newVersionType === "RELEASE") {
         formData.append("releaseDate", newReleaseDate.trim());
       }
@@ -708,7 +1332,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
         const payload = (await uploadResponse.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error || "Не удалось добавить файл к треку.");
       }
-      await refetch();
+      await Promise.all([refetch(), refetchFeedback()]);
       resetNewVersionForm();
       setShowAddVersionModal(false);
     } catch (error) {
@@ -717,36 +1341,6 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
       setSyncingStatus(false);
       setCreatingVersion(false);
     }
-  }
-
-  function demoPlaybackItem(demo: Demo) {
-    const currentTrack = track;
-    if (!currentTrack) return null;
-    if (!isPlayableDemo(demo)) return null;
-    const coverType: "image" | "gradient" = parentProject?.coverType === "IMAGE" ? "image" : "gradient";
-    return {
-      demoId: demo.id,
-      src: `/api/audio-clips/${demo.id}/stream`,
-      title: currentTrack.title,
-      subtitle: `${parentProject?.title || "Без проекта"} • ${versionTypeLabels[demo.versionType]}`,
-      linkHref: `/songs/${currentTrack.id}`,
-      durationSec: demo.duration,
-      trackId: currentTrack.id,
-      projectId: parentProject?.id ?? null,
-      versionType: demo.versionType,
-      queueGroupType: "track" as const,
-      queueGroupId: currentTrack.id,
-      cover: {
-        type: coverType,
-        imageUrl: parentProject?.coverImageUrl ?? null,
-        colorA: parentProject?.coverColorA ?? null,
-        colorB: parentProject?.coverColorB ?? null
-      },
-      meta: {
-        projectTitle: parentProject?.title ?? undefined,
-        pathStageName: track.pathStage?.name ?? undefined
-      }
-    };
   }
 
   function playDemoInTrackQueue(demo: Demo, options?: { openPlayerWindow?: boolean; toggleIfActive?: boolean }) {
@@ -889,18 +1483,39 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
       const orderedTracks = projectDetail.tracks ?? [];
       const currentIndex = orderedTracks.findIndex((item) => item.id === currentTrackId);
       if (currentIndex < 0 || orderedTracks.length < 2) return;
+      setMoveTrackPrompt({
+        total: orderedTracks.length,
+        currentIndex,
+        value: String(currentIndex + 1)
+      });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Не удалось переместить трек.");
+    }
+  }
 
-      const rawPosition = window
-        .prompt(`Позиция для «${currentTitle}» (1-${orderedTracks.length})`, String(currentIndex + 1))
-        ?.trim();
-      if (!rawPosition) return;
+  async function submitMoveCurrentTrackInProject() {
+    if (!parentProject || !moveTrackPrompt) return;
+    const rawPosition = moveTrackPrompt.value.trim();
+    const nextIndex = Number.parseInt(rawPosition, 10) - 1;
+    if (!Number.isInteger(nextIndex) || nextIndex < 0 || nextIndex >= moveTrackPrompt.total) {
+      setPageError(`Введите номер позиции от 1 до ${moveTrackPrompt.total}.`);
+      return;
+    }
+    if (nextIndex === moveTrackPrompt.currentIndex) {
+      setMoveTrackPrompt(null);
+      return;
+    }
 
-      const nextIndex = Number.parseInt(rawPosition, 10) - 1;
-      if (!Number.isInteger(nextIndex) || nextIndex < 0 || nextIndex >= orderedTracks.length) {
-        setPageError(`Введите номер позиции от 1 до ${orderedTracks.length}.`);
+    setMovingTrackInProject(true);
+    setPageError("");
+    try {
+      const projectDetail = await apiFetchJson<ProjectTrackOrderPayload>(`/api/projects/${parentProject.id}`);
+      const orderedTracks = projectDetail.tracks ?? [];
+      const currentIndex = orderedTracks.findIndex((item) => item.id === currentTrackId);
+      if (currentIndex < 0 || orderedTracks.length < 2) {
+        setMoveTrackPrompt(null);
         return;
       }
-      if (nextIndex === currentIndex) return;
 
       const orderedTrackIds = orderedTracks.map((item) => item.id);
       orderedTrackIds.splice(currentIndex, 1);
@@ -916,12 +1531,21 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
         throw new Error(payload?.error || "Не удалось переместить трек.");
       }
       await refetch();
+      setMoveTrackPrompt(null);
+      toast.success("Позиция трека обновлена.");
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Не удалось переместить трек.");
+    } finally {
+      setMovingTrackInProject(false);
     }
   }
 
-  const hasOpenOverlay = showEditTrackModal || showAddVersionModal || showDistributionModal;
+  const hasOpenOverlay =
+    showEditTrackModal ||
+    showAddVersionModal ||
+    showDistributionModal ||
+    showCreateFeedbackModal ||
+    Boolean(responseModalRequestId);
 
   return (
     <div className="relative pb-40">
@@ -992,7 +1616,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                       className="block rounded-xl px-3 py-2 text-sm text-brand-ink hover:bg-black/5"
                       onClick={() => setShowTrackActionsMenu(false)}
                     >
-                      Export audio
+                      Экспорт аудио
                     </a>
                   ) : (
                     <button
@@ -1000,17 +1624,17 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                       disabled
                       className="block w-full cursor-not-allowed rounded-xl px-3 py-2 text-left text-sm text-brand-muted/60"
                     >
-                      Export audio
+                      Экспорт аудио
                     </button>
                   )}
                   <button
                     type="button"
                     className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5 disabled:cursor-not-allowed disabled:text-brand-muted/60 disabled:hover:bg-transparent"
-                    title={isSingleProject ? "Недоступно для single" : undefined}
+                    title={isSingleProject ? "Недоступно для сингла" : undefined}
                     onClick={() => void moveCurrentTrackInProject()}
                     disabled={!parentProject || isSingleProject}
                   >
-                    Move
+                    Переместить
                   </button>
                   <div className="my-1 h-px bg-black/5" />
                   <button
@@ -1018,7 +1642,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                     className="block w-full rounded-xl px-3 py-2 text-left text-sm text-red-700 hover:bg-[#ffe7e1]"
                     onClick={deleteCurrentTrack}
                   >
-                    Delete track
+                    Удалить трек
                   </button>
                 </div>
               )}
@@ -1039,9 +1663,9 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                   <div className="mb-2 flex flex-wrap items-center gap-2">
                     <Badge className="bg-white">
                       <Sparkles className="mr-1 h-3 w-3" />
-                      {isSingleProject ? "Single Versions" : "Song Path"}
+                      {isSingleProject ? "Версии сингла" : "Путь песни"}
                     </Badge>
-                    {isSingleProject ? <Badge className="bg-white">Single</Badge> : null}
+                    {isSingleProject ? <Badge className="bg-white">Сингл</Badge> : null}
                     <Badge className="bg-white">
                       <AudioLines className="mr-1 h-3 w-3" />
                       {track.demos.length} верс.
@@ -1071,17 +1695,119 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                         })}
                       />
                       <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
-                        <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Single cover</p>
+                        <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Обложка сингла</p>
                         <p className="mt-1 text-sm font-medium text-brand-ink">{parentProject.title}</p>
                         <p className="mt-1 text-xs text-brand-muted">
-                          Этот экран открыт в режиме single и ведет напрямую к версиям трека.
+                          Этот экран открыт в режиме сингла и ведет напрямую к версиям трека.
                         </p>
                       </div>
                     </div>
                   ) : null}
-                  <p className="mt-1 text-xs text-brand-muted">
-                    Этап: {track.pathStage?.name || "Не выбран"}
-                  </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${workbenchBadgeClass(track.workbenchState)}`}>
+                      {track.workbenchStateLabel}
+                    </span>
+                    {track.feedbackSummary.latestStatus && track.feedbackSummary.latestStatusLabel ? (
+                      <span
+                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${feedbackStatusBadgeClass(
+                          track.feedbackSummary.latestStatus
+                        )}`}
+                      >
+                        {track.feedbackSummary.latestStatusLabel}
+                      </span>
+                    ) : null}
+                    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${identityBridgeBadgeClass(track.identityBridge.status)}`}>
+                      {identityBridgeLabel(track.identityBridge.status)}
+                    </span>
+                    <span className="inline-flex rounded-full border border-brand-border bg-white px-2.5 py-1 text-xs text-brand-muted">
+                      PATH: {track.pathStage?.name || "Не выбран"}
+                    </span>
+                  </div>
+                  {track.trackIntent?.summary ? (
+                    <div className="mt-3 rounded-2xl border border-brand-border bg-white/80 p-3 shadow-sm">
+                      <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Intent</p>
+                      <p className="mt-1 text-sm font-medium text-brand-ink">{track.trackIntent.summary}</p>
+                      {track.trackIntent.whyNow ? <p className="mt-1 text-sm text-brand-muted">{track.trackIntent.whyNow}</p> : null}
+                    </div>
+                  ) : null}
+                  {track.activeNextStep ? (
+                    <RecommendationCard
+                      className="mt-3 bg-[#f7fbf2]"
+                      recommendation={buildTrackNextStepRecommendation(track.activeNextStep)}
+                    />
+                  ) : null}
+                  <div className="mt-3 rounded-2xl border border-brand-border bg-[#eef5fb] p-3 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Связь с миром артиста</p>
+                      <Badge className={identityBridgeBadgeClass(track.identityBridge.status)}>
+                        {identityBridgeLabel(track.identityBridge.status)}
+                      </Badge>
+                    </div>
+                    <p className="mt-2 text-sm text-brand-ink">{track.identityBridge.summary}</p>
+                    {track.identityBridge.supports.find((item) => item.kind === "mission") ? (
+                      <p className="mt-2 text-sm text-brand-muted">
+                        Миссия: {track.identityBridge.supports.find((item) => item.kind === "mission")?.value}
+                      </p>
+                    ) : null}
+                    {track.identityBridge.matches.coreThemes.length ? (
+                      <div className="mt-3">
+                        <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Темы</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {track.identityBridge.matches.coreThemes.map((item) => (
+                            <Badge key={`theme:${item}`} className="border-brand-border bg-white text-brand-ink">
+                              {item}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {track.identityBridge.matches.aestheticKeywords.length ? (
+                      <div className="mt-3">
+                        <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Эстетика</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {track.identityBridge.matches.aestheticKeywords.map((item) => (
+                            <Badge key={`aesthetic:${item}`} className="border-brand-border bg-white text-brand-ink">
+                              {item}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {track.identityBridge.matches.fashionSignals.length ? (
+                      <div className="mt-3">
+                        <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Fashion signals</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {track.identityBridge.matches.fashionSignals.map((item) => (
+                            <Badge key={`fashion:${item}`} className="border-brand-border bg-white text-brand-ink">
+                              {item}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {track.identityBridge.linkedGoals.length ? (
+                      <div className="mt-3">
+                        <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Связанные цели</p>
+                        <div className="mt-2 space-y-2">
+                          {track.identityBridge.linkedGoals.map((item) => (
+                            <div key={item.taskId} className="rounded-2xl border border-brand-border bg-white/80 px-3 py-2 text-sm">
+                              <p className="font-medium text-brand-ink">{item.goalTitle}</p>
+                              <p className="mt-1 text-brand-muted">
+                                {item.taskTitle}
+                                {item.isPrimary ? " • primary goal" : ""}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {track.identityBridge.warnings.length ? (
+                      <div className="mt-3 rounded-2xl border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                        <p className="font-medium">{track.identityBridge.warnings[0].title}</p>
+                        <p className="mt-1 text-amber-800">{track.identityBridge.warnings[0].message}</p>
+                      </div>
+                    ) : null}
+                  </div>
                   <SongAnalysisBadges
                     bpm={track.displayBpm}
                     keyRoot={track.displayKeyRoot}
@@ -1090,14 +1816,25 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                   />
                 </div>
 
-                <div className="grid gap-2 sm:grid-cols-3">
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                   <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
                     <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Проект</p>
                     <p className="mt-1 truncate text-sm font-medium text-brand-ink">{parentProject?.title || "Без проекта"}</p>
                   </div>
                   <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
-                    <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Статус</p>
-                    <p className="mt-1 truncate text-sm font-medium text-brand-ink">{track.pathStage?.name || "Не выбран"}</p>
+                    <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Workbench</p>
+                    <p className="mt-1 truncate text-sm font-medium text-brand-ink">{track.workbenchStateLabel}</p>
+                  </div>
+                  <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
+                    <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Feedback</p>
+                    <p className="mt-1 truncate text-sm font-medium text-brand-ink">
+                      {track.feedbackSummary.latestStatusLabel ?? "Не запрошен"}
+                    </p>
+                    <p className="mt-1 text-xs text-brand-muted">
+                      {track.feedbackSummary.unresolvedItemsCount > 0
+                        ? `${track.feedbackSummary.unresolvedItemsCount} пунктов ждут разбора`
+                        : "Без открытых пунктов"}
+                    </p>
                   </div>
                   <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
                     <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Последняя активность</p>
@@ -1165,10 +1902,16 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                   У трека пока нет версий. Начни с кнопки добавления версии ниже.
                 </div>
               )}
-            </div>
-          </section>
+	            </div>
+	          </section>
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,380px)_1fr]">
+            <LearnContextCard
+              block={learnBlock ?? null}
+              targetLabelOverride={track.title}
+              onAction={handleLearnAction}
+            />
+
+	          <div className="grid gap-6 xl:grid-cols-[minmax(0,380px)_1fr]">
             <div className="min-w-0 space-y-6">
               {hasMasteredVersion && (
                 <section className="relative overflow-hidden rounded-[24px] border border-brand-border bg-white/85 p-4 shadow-sm md:p-5">
@@ -1205,7 +1948,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                 <div className="relative mb-3">
                   <div className="mb-2 inline-flex items-center gap-2 rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">
                     <PlusCircle className="h-3.5 w-3.5 text-brand-ink" />
-                    Add Version
+                    Добавить версию
                   </div>
                   <h2 className="text-xl font-semibold tracking-tight text-brand-ink">Добавить версию</h2>
                   <p className="text-sm text-brand-muted">Запись, импорт или текстовый этап в одном месте.</p>
@@ -1222,7 +1965,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                         <rect x="1.75" y="3" width="9.5" height="10" rx="2" stroke="currentColor" strokeWidth="1.5" />
                         <path d="M11.5 6.25 14 4.75v6.5l-2.5-1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
-                      <span>Convert</span>
+                      <span>Конвертировать</span>
                     </span>
                   </Button>
                   <Button
@@ -1271,7 +2014,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                     {isSingleProject ? "Версии сингла" : "Путь песни"}
                   </h2>
 	                <p className="text-sm text-brand-muted">
-                    {isSingleProject ? "Все версии трека в single-режиме с обложкой релиза." : "Таймлайн по этапам: от идеи до релиза."}
+                    {isSingleProject ? "Все версии трека в режиме сингла с обложкой релиза." : "Таймлайн по этапам: от идеи до релиза."}
                   </p>
 	              </div>
               <div className="w-full min-w-0 xl:w-auto">
@@ -1321,7 +2064,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
 	                    <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#d9f99d] via-[#c8e2ab] to-transparent" />
 	                    <div className="grid gap-3 md:grid-cols-[100px_minmax(0,1fr)]">
 	                      <div className="relative">
-	                        {!isLastStep && <div className="absolute left-5 top-12 h-[calc(100%+12px)] w-px bg-brand-border/80" />}
+	                        {!isLastStep && <div className="absolute left-5 top-12 hidden h-[calc(100%+12px)] w-px bg-brand-border/80 md:block" />}
 	                        <div className="flex items-start gap-3 md:block">
 	                          <div
 	                            className={`relative z-10 grid h-10 w-10 place-items-center rounded-2xl border text-xs font-semibold shadow-sm ${
@@ -1397,7 +2140,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                                       }`}
                                       style={projectPlayAccentStyle}
                                       onClick={() => handleDemoPlay(demo)}
-                                      aria-label={playback.isPlayingDemo(demo.id) ? "Pause version" : "Play version"}
+                                      aria-label={playback.isPlayingDemo(demo.id) ? "Пауза версии" : "Воспроизвести версию"}
                                     >
                                       <PlaybackIcon
                                         type={playback.isPlayingDemo(demo.id) ? "pause" : "play"}
@@ -1436,7 +2179,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
 	                                    className="grid h-9 w-9 place-items-center rounded-xl border border-brand-border bg-white text-brand-ink hover:bg-white disabled:cursor-not-allowed disabled:opacity-35"
                                     onClick={() => moveDemoWithinStep(step.versionType, step.demos, demo.id, -1)}
                                     disabled={!canMoveUp || isStepReordering}
-                                    aria-label="Move up"
+                                    aria-label="Переместить выше"
                                   >
                                     ↑
                                   </button>
@@ -1445,7 +2188,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
 	                                    className="grid h-9 w-9 place-items-center rounded-xl border border-brand-border bg-white text-brand-ink hover:bg-white disabled:cursor-not-allowed disabled:opacity-35"
                                     onClick={() => moveDemoWithinStep(step.versionType, step.demos, demo.id, 1)}
                                     disabled={!canMoveDown || isStepReordering}
-                                    aria-label="Move down"
+                                    aria-label="Переместить ниже"
                                   >
                                     ↓
                                   </button>
@@ -1487,36 +2230,76 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
 	                                </div>
 	                              )}
 
-	                              <div className="mt-3 space-y-2">
-                                {editingCommentId === demo.id ? (
+                              <div className="mt-3 space-y-2">
+                                {editingReflectionId === demo.id ? (
                                   <div className="space-y-2">
                                     <Textarea
-                                      value={demoNotes[demo.id] ?? demo.textNote ?? ""}
+                                      value={getReflectionDraft(demo).whyMade}
                                       onChange={(event) =>
-                                        setDemoNotes((prev) => ({
+                                        setDemoReflectionDrafts((prev) => ({
                                           ...prev,
-                                          [demo.id]: event.target.value
+                                          [demo.id]: {
+                                            ...getReflectionDraft(demo),
+                                            whyMade: event.target.value
+                                          }
                                         }))
                                       }
-                                      placeholder="Комментарий к версии"
-                                      rows={4}
-	                                      className="border-brand-border bg-white text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
+                                      placeholder="Зачем делал эту версию"
+                                      rows={3}
+                                      className="border-brand-border bg-white text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
+                                    />
+                                    <Textarea
+                                      value={getReflectionDraft(demo).whatChanged}
+                                      onChange={(event) =>
+                                        setDemoReflectionDrafts((prev) => ({
+                                          ...prev,
+                                          [demo.id]: {
+                                            ...getReflectionDraft(demo),
+                                            whatChanged: event.target.value
+                                          }
+                                        }))
+                                      }
+                                      placeholder="Что изменил"
+                                      rows={3}
+                                      className="border-brand-border bg-white text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
+                                    />
+                                    <Textarea
+                                      value={getReflectionDraft(demo).whatNotWorking}
+                                      onChange={(event) =>
+                                        setDemoReflectionDrafts((prev) => ({
+                                          ...prev,
+                                          [demo.id]: {
+                                            ...getReflectionDraft(demo),
+                                            whatNotWorking: event.target.value
+                                          }
+                                        }))
+                                      }
+                                      placeholder="Что не устроило"
+                                      rows={3}
+                                      className="border-brand-border bg-white text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
                                     />
                                     <div className="flex flex-wrap gap-2">
                                       <Button
                                         variant="secondary"
-	                                        className="border-brand-border bg-white text-brand-ink hover:bg-white"
+                                        className="border-brand-border bg-white text-brand-ink hover:bg-white"
                                         disabled={updatingDemoId === demo.id}
                                         onClick={async () => {
+                                          const draft = getReflectionDraft(demo);
                                           setUpdatingDemoId(demo.id);
                                           const response = await apiFetch(`/api/audio-clips/${demo.id}`, {
                                             method: "PATCH",
                                             headers: { "Content-Type": "application/json" },
-                                            body: JSON.stringify({ textNote: (demoNotes[demo.id] ?? "").trim() || null })
+                                            body: JSON.stringify({
+                                              versionReflection: {
+                                                whyMade: draft.whyMade.trim() || null,
+                                                whatChanged: draft.whatChanged.trim() || null,
+                                                whatNotWorking: draft.whatNotWorking.trim() || null
+                                              }
+                                            })
                                           });
                                           if (response.ok) {
                                             await refetch();
-                                            setEditingCommentId("");
+                                            setEditingReflectionId("");
                                           }
                                           setUpdatingDemoId("");
                                         }}
@@ -1525,34 +2308,68 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                                       </Button>
                                       <Button
                                         variant="secondary"
-	                                        className="border-brand-border bg-white text-brand-ink hover:bg-white"
-                                        onClick={() => setEditingCommentId("")}
+                                        className="border-brand-border bg-white text-brand-ink hover:bg-white"
+                                        onClick={() => setEditingReflectionId("")}
                                       >
                                         Отмена
                                       </Button>
                                     </div>
                                   </div>
-                                ) : demo.textNote ? (
+                                ) : demo.versionReflection?.whyMade || demo.versionReflection?.whatChanged || demo.versionReflection?.whatNotWorking || demo.versionReflection?.legacyNote ? (
                                   <button
                                     type="button"
-	                                    className="w-full rounded-xl border border-brand-border bg-[#f7fbf2] px-3 py-2 text-left text-sm text-brand-ink shadow-sm"
+                                    className="w-full rounded-xl border border-brand-border bg-[#f7fbf2] px-3 py-3 text-left text-sm text-brand-ink shadow-sm"
                                     onClick={() => {
-                                      setDemoNotes((prev) => ({ ...prev, [demo.id]: demo.textNote ?? "" }));
-                                      setEditingCommentId(demo.id);
+                                      setDemoReflectionDrafts((prev) => ({
+                                        ...prev,
+                                        [demo.id]: getReflectionDraft(demo)
+                                      }));
+                                      setEditingReflectionId(demo.id);
                                     }}
                                   >
-                                    {demo.textNote}
+                                    <div className="space-y-2">
+                                      {demo.versionReflection?.whyMade ? (
+                                        <div>
+                                          <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Зачем делал</p>
+                                          <p className="mt-1">{demo.versionReflection.whyMade}</p>
+                                        </div>
+                                      ) : null}
+                                      {demo.versionReflection?.whatChanged ? (
+                                        <div>
+                                          <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Что изменил</p>
+                                          <p className="mt-1">{demo.versionReflection.whatChanged}</p>
+                                        </div>
+                                      ) : null}
+                                      {demo.versionReflection?.whatNotWorking ? (
+                                        <div>
+                                          <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Что не устроило</p>
+                                          <p className="mt-1">{demo.versionReflection.whatNotWorking}</p>
+                                        </div>
+                                      ) : null}
+                                      {!demo.versionReflection?.whyMade &&
+                                      !demo.versionReflection?.whatChanged &&
+                                      !demo.versionReflection?.whatNotWorking &&
+                                      demo.versionReflection?.legacyNote ? (
+                                        <div>
+                                          <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Старый комментарий</p>
+                                          <p className="mt-1">{demo.versionReflection.legacyNote}</p>
+                                        </div>
+                                      ) : null}
+                                    </div>
                                   </button>
                                 ) : (
                                   <Button
                                     variant="secondary"
-	                                    className="border-brand-border bg-white text-brand-ink hover:bg-white"
+                                    className="border-brand-border bg-white text-brand-ink hover:bg-white"
                                     onClick={() => {
-                                      setDemoNotes((prev) => ({ ...prev, [demo.id]: "" }));
-                                      setEditingCommentId(demo.id);
+                                      setDemoReflectionDrafts((prev) => ({
+                                        ...prev,
+                                        [demo.id]: getReflectionDraft(demo)
+                                      }));
+                                      setEditingReflectionId(demo.id);
                                     }}
                                   >
-                                    Добавить комментарий
+                                    Добавить рефлексию версии
                                   </Button>
                                 )}
                               </div>
@@ -1579,9 +2396,290 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                   </div>
                 );
               })}
+                </div>
+              </section>
+
+              <section className="relative overflow-hidden rounded-[24px] border border-brand-border bg-white/85 p-4 shadow-sm md:p-5">
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(238,245,251,0.7),transparent_38%)]" />
+                <div className="relative space-y-3">
+                  <div>
+                    <div className="mb-2 inline-flex items-center gap-2 rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">
+                      <Sparkles className="h-3.5 w-3.5 text-brand-ink" />
+                      Feedback Layer
+                    </div>
+                    <h2 className="text-xl font-semibold tracking-tight text-brand-ink">Запросить фидбек</h2>
+                    <p className="text-sm text-brand-muted">Зафиксируй запрос, получи ответ и разберись с ним внутри трека.</p>
+                  </div>
+
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                    <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
+                      <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Текущий статус</p>
+                      <p className="mt-1 text-sm font-medium text-brand-ink">
+                        {track.feedbackSummary.latestStatusLabel ?? "Ещё не запрашивали"}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
+                      <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Открытые пункты</p>
+                      <p className="mt-1 text-sm font-medium text-brand-ink">{track.feedbackSummary.unresolvedItemsCount}</p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-brand-border bg-[#eef5fb] p-3 shadow-sm">
+                    <p className="text-sm text-brand-ink">
+                      {track.feedbackSummary.nextVersionItemsCount > 0
+                        ? `${track.feedbackSummary.nextVersionItemsCount} пунктов уже ждут проверки в следующей версии.`
+                        : "Пока нет пунктов, отложенных до следующей версии."}
+                    </p>
+                  </div>
+
+                  <Button
+                    className="w-full"
+                    onClick={() => {
+                      resetFeedbackRequestForm();
+                      setShowCreateFeedbackModal(true);
+                    }}
+                  >
+                    Запросить фидбек
+                  </Button>
+
+                  <div className="border-t border-brand-border pt-3">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-brand-ink">Входящие отзывы</p>
+                        <p className="text-xs text-brand-muted">Все запросы и разбор тезисов хранятся внутри этого трека.</p>
+                      </div>
+                      <span className="inline-flex rounded-full border border-brand-border bg-white px-2.5 py-1 text-xs text-brand-muted">
+                        {feedbackRequests.length}
+                      </span>
+                    </div>
+
+                    {feedbackRequests.length ? (
+                      <div className="space-y-3">
+                        {feedbackRequests.map((feedbackRequest) => {
+                          const isExpanded = Boolean(expandedFeedbackRequests[feedbackRequest.id]);
+                          return (
+                            <article
+                              key={feedbackRequest.id}
+                              className="rounded-2xl border border-brand-border bg-white/90 p-3 shadow-sm"
+                            >
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-sm font-semibold text-brand-ink">{feedbackRequest.typeLabel}</span>
+                                    <span
+                                      className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${feedbackStatusBadgeClass(
+                                        feedbackRequest.status
+                                      )}`}
+                                    >
+                                      {feedbackRequest.statusLabel}
+                                    </span>
+                                    {feedbackRequest.community ? (
+                                      <span className="inline-flex rounded-full border border-[#cde1bc] bg-[#eef7df] px-2.5 py-1 text-xs text-[#4b6440]">
+                                        Опубликовано в community
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <p className="mt-1 text-sm text-brand-muted">
+                                    {feedbackRequest.recipient.label}
+                                    {feedbackRequest.recipient.safeId ? ` • SAFE ID ${feedbackRequest.recipient.safeId}` : ""}
+                                    {feedbackRequest.recipient.channel ? ` • ${feedbackRequest.recipient.channel}` : ""}
+                                  </p>
+                                  {feedbackRequest.community ? (
+                                    <p className="mt-1 text-xs text-brand-muted">
+                                      {feedbackRequest.community.title ?? "Community thread"} • {feedbackRequest.community.replyCount} ответов •{" "}
+                                      {feedbackRequest.community.status === "OPEN"
+                                        ? "открыт"
+                                        : feedbackRequest.community.status === "CLOSED"
+                                          ? "закрыт"
+                                          : "в архиве"}
+                                    </p>
+                                  ) : null}
+                                  <p className="mt-1 text-xs text-brand-muted">
+                                    {feedbackRequest.demoRef
+                                      ? `${versionTypeLabels[feedbackRequest.demoRef.versionType]} • ${formatDate(feedbackRequest.demoRef.createdAt)}`
+                                      : feedbackRequest.lyricsSnapshot
+                                        ? "Snapshot текста"
+                                        : "Без версии"}
+                                  </p>
+                                  {feedbackRequest.requestMessage ? (
+                                    <p className="mt-2 text-sm text-brand-ink">{feedbackRequest.requestMessage}</p>
+                                  ) : null}
+                                </div>
+
+                                <div className="min-w-[180px] space-y-2 text-xs text-brand-muted">
+                                  <p>{feedbackRequest.counts.totalItems} тезисов</p>
+                                  <p>{feedbackRequest.counts.resolvedItems} разобрано</p>
+                                  <p>{feedbackRequest.counts.nextVersionItems} ждут следующую версию</p>
+                                  <p>Отправлено: {formatDate(feedbackRequest.sentAt)}</p>
+                                  {feedbackRequest.receivedAt ? <p>Получено: {formatDate(feedbackRequest.receivedAt)}</p> : null}
+                                  {feedbackRequest.reviewedAt ? <p>Разобрано: {formatDate(feedbackRequest.reviewedAt)}</p> : null}
+                                </div>
+                              </div>
+
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <Button
+                                  variant="secondary"
+                                  className="border-brand-border bg-white text-brand-ink hover:bg-white"
+                                  onClick={() => openFeedbackResponseModal(feedbackRequest.id)}
+                                >
+                                  Добавить ответ
+                                </Button>
+                                {feedbackRequest.community ? (
+                                  <Link href={`/community#${feedbackRequest.community.postId}`}>
+                                    <Button variant="secondary" className="border-brand-border bg-white text-brand-ink hover:bg-white">
+                                      Открыть в Community
+                                    </Button>
+                                  </Link>
+                                ) : null}
+                                <Button
+                                  variant="secondary"
+                                  className="border-brand-border bg-white text-brand-ink hover:bg-white"
+                                  onClick={() =>
+                                    setExpandedFeedbackRequests((prev) => ({
+                                      ...prev,
+                                      [feedbackRequest.id]: true
+                                    }))
+                                  }
+                                >
+                                  Разобрать
+                                </Button>
+                                <Button
+                                  variant="secondary"
+                                  className="border-brand-border bg-white text-brand-ink hover:bg-white"
+                                  onClick={() =>
+                                    setExpandedFeedbackRequests((prev) => ({
+                                      ...prev,
+                                      [feedbackRequest.id]: !prev[feedbackRequest.id]
+                                    }))
+                                  }
+                                >
+                                  {isExpanded ? "Свернуть" : "Развернуть"}
+                                </Button>
+                              </div>
+
+                              {isExpanded ? (
+                                <div className="mt-3 space-y-3 border-t border-brand-border pt-3">
+                                  {feedbackRequest.lyricsSnapshot ? (
+                                    <div className="rounded-2xl border border-brand-border bg-[#fbfdf7] p-3">
+                                      <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Snapshot текста</p>
+                                      <p className="mt-2 whitespace-pre-wrap text-sm text-brand-ink">{feedbackRequest.lyricsSnapshot}</p>
+                                    </div>
+                                  ) : null}
+
+                                  {feedbackRequest.items.length ? (
+                                    feedbackCategoryOrder.map((category) => {
+                                      const items = feedbackRequest.items.filter((item) => item.category === category);
+                                      if (!items.length) return null;
+
+                                      return (
+                                        <section key={`${feedbackRequest.id}:${category}`} className="space-y-2">
+                                          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">
+                                            {items[0]?.categoryLabel}
+                                          </p>
+                                          {items.map((item) => (
+                                            <div key={item.id} className="rounded-2xl border border-brand-border bg-[#f9fbf6] p-3">
+                                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                                <div className="flex-1">
+                                                  <p className="text-sm text-brand-ink">{item.body}</p>
+                                                  {item.source === "COMMUNITY_REPLY" ? (
+                                                    <p className="mt-1 text-xs text-brand-muted">
+                                                      Из community
+                                                      {item.author?.nickname ? ` • ${item.author.nickname}` : ""}
+                                                    </p>
+                                                  ) : item.source === "INTERNAL_USER_REPLY" ? (
+                                                    <p className="mt-1 text-xs text-brand-muted">
+                                                      Внутри продукта
+                                                      {item.author?.nickname ? ` • ${item.author.nickname}` : ""}
+                                                    </p>
+                                                  ) : null}
+                                                </div>
+                                                {item.resolution ? (
+                                                  <span
+                                                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${feedbackResolutionBadgeClass(
+                                                      item.resolution.status
+                                                    )}`}
+                                                  >
+                                                    {item.resolution.statusLabel}
+                                                  </span>
+                                                ) : (
+                                                  <span className="inline-flex rounded-full border border-brand-border bg-white px-2.5 py-1 text-xs text-brand-muted">
+                                                    Не разобрано
+                                                  </span>
+                                                )}
+                                              </div>
+
+                                              {item.resolution?.targetDemo ? (
+                                                <p className="mt-2 text-xs text-brand-muted">
+                                                  Связано с версией {versionTypeLabels[item.resolution.targetDemo.versionType]} •{" "}
+                                                  {formatDate(item.resolution.targetDemo.createdAt)}
+                                                </p>
+                                              ) : null}
+
+                                              <div className="mt-3 space-y-2">
+                                                <Textarea
+                                                  value={feedbackResolutionNotes[item.id] ?? item.resolution?.note ?? ""}
+                                                  onChange={(event) =>
+                                                    setFeedbackResolutionNotes((prev) => ({
+                                                      ...prev,
+                                                      [item.id]: event.target.value
+                                                    }))
+                                                  }
+                                                  placeholder="Комментарий к решению"
+                                                  rows={2}
+                                                  className="border-brand-border bg-white/90 text-brand-ink placeholder:text-brand-muted"
+                                                />
+                                                <div className="flex flex-wrap gap-2">
+                                                  <Button
+                                                    variant="secondary"
+                                                    className="border-brand-border bg-white text-brand-ink hover:bg-white"
+                                                    disabled={resolvingFeedbackItemId === item.id}
+                                                    onClick={() => void resolveFeedbackItem(item.id, "ACCEPTED")}
+                                                  >
+                                                    Принять
+                                                  </Button>
+                                                  <Button
+                                                    variant="secondary"
+                                                    className="border-brand-border bg-white text-brand-ink hover:bg-white"
+                                                    disabled={resolvingFeedbackItemId === item.id}
+                                                    onClick={() => void resolveFeedbackItem(item.id, "REJECTED")}
+                                                  >
+                                                    Отклонить
+                                                  </Button>
+                                                  <Button
+                                                    variant="secondary"
+                                                    className="border-brand-border bg-white text-brand-ink hover:bg-white"
+                                                    disabled={resolvingFeedbackItemId === item.id}
+                                                    onClick={() => void resolveFeedbackItem(item.id, "NEXT_VERSION")}
+                                                  >
+                                                    Проверить в следующей версии
+                                                  </Button>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </section>
+                                      );
+                                    })
+                                  ) : (
+                                    <div className="rounded-2xl border border-dashed border-brand-border bg-[#fbfdf7] px-3 py-4 text-sm text-brand-muted">
+                                      Ответ пока не занесён. Добавь его из продукта, когда получишь feedback.
+                                    </div>
+                                  )}
+                                </div>
+                              ) : null}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-brand-border bg-[#fbfdf7] px-3 py-5 text-sm text-brand-muted">
+                        Пока нет запросов на фидбек. Здесь появятся входящие отзывы и решения по ним.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
             </div>
-          </section>
-        </div>
       </div>
 
       {showEditTrackModal && (
@@ -1589,7 +2687,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
           className="fixed inset-0 z-[80] bg-[#182019]/45 backdrop-blur-md"
           onClick={() => setShowEditTrackModal(false)}
         >
-          <div className="flex min-h-full items-end justify-center p-3 md:items-center md:p-6">
+          <div className="flex min-h-full items-start justify-center p-3 pt-16 md:items-center md:p-6">
             <div
               className="relative max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-[24px] border border-brand-border bg-[#f7fbf2] p-4 shadow-[0_28px_70px_rgba(61,84,46,0.24)] md:p-5"
               onClick={(event) => event.stopPropagation()}
@@ -1633,6 +2731,66 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                     </option>
                   ))}
                 </Select>
+                <Select
+                  value={workbenchState}
+                  onChange={(event) => setWorkbenchState(event.target.value as Track["workbenchState"])}
+                  className="border-brand-border bg-white/90 text-brand-ink focus:ring-brand-border"
+                >
+                  <option value="IN_PROGRESS">В работе</option>
+                  <option value="STUCK">Застрял</option>
+                  <option value="NEEDS_FEEDBACK">Нужен фидбек</option>
+                  <option value="DEFERRED">Отложен</option>
+                  <option value="READY_FOR_NEXT_STEP">Готов к следующему шагу</option>
+                </Select>
+                <Input
+                  value={intentSummary}
+                  onChange={(event) => setIntentSummary(event.target.value)}
+                  placeholder="Intent трека: что именно ты сейчас строишь"
+                  className="border-brand-border bg-white/90 text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
+                />
+                <Textarea
+                  value={intentWhyNow}
+                  onChange={(event) => setIntentWhyNow(event.target.value)}
+                  placeholder="Почему этот трек важен именно сейчас"
+                  rows={3}
+                  className="border-brand-border bg-white/90 text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
+                />
+                <div className="rounded-2xl border border-brand-border bg-white/75 p-3 shadow-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-brand-ink">Следующий шаг по треку</p>
+                      <p className="text-xs text-brand-muted">Один активный шаг, который ведёт трек дальше.</p>
+                    </div>
+                    {track.activeNextStep ? (
+                      <span className="inline-flex rounded-full border border-brand-border bg-white px-2.5 py-1 text-[11px] text-brand-muted">
+                        active
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <Input
+                      value={nextStepTitle}
+                      onChange={(event) => setNextStepTitle(event.target.value)}
+                      placeholder="Название следующего шага"
+                      className="border-brand-border bg-white/90 text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
+                    />
+                    <Textarea
+                      value={nextStepDetail}
+                      onChange={(event) => setNextStepDetail(event.target.value)}
+                      placeholder="Деталь шага"
+                      rows={3}
+                      className="border-brand-border bg-white/90 text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
+                    />
+                    <Button
+                      variant="secondary"
+                      className="border-brand-border bg-white/90 text-brand-ink hover:bg-white"
+                      disabled={savingNextStep || !nextStepTitle.trim()}
+                      onClick={() => void saveTrackNextStep()}
+                    >
+                      {savingNextStep ? "Сохраняем шаг..." : track.activeNextStep ? "Заменить следующий шаг" : "Сохранить следующий шаг"}
+                    </Button>
+                  </div>
+                </div>
 
                 <div className="flex flex-wrap gap-2">
                   <Button
@@ -1646,7 +2804,14 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({
                             title: currentTitle.trim(),
-                            pathStageId: currentStage ?? null
+                            pathStageId: currentStage ?? null,
+                            workbenchState,
+                            trackIntent: intentSummary.trim() || intentWhyNow.trim()
+                              ? {
+                                  summary: intentSummary.trim() || currentTitle.trim(),
+                                  whyNow: intentWhyNow.trim() || null
+                                }
+                              : null
                           })
                         });
                         if (!response.ok) {
@@ -1732,7 +2897,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
           className="fixed inset-0 z-[80] bg-[#182019]/45 backdrop-blur-md"
           onClick={() => setShowAddVersionModal(false)}
         >
-          <div className="flex min-h-full items-end justify-center p-3 md:items-center md:p-6">
+          <div className="flex min-h-full items-start justify-center p-3 pt-16 md:items-center md:p-6">
             <div
               className="relative max-h-[calc(100vh-2rem)] w-full max-w-3xl overflow-y-auto rounded-[24px] border border-brand-border bg-[#f7fbf2] p-4 shadow-[0_28px_70px_rgba(61,84,46,0.24)] md:p-5"
               onClick={(event) => event.stopPropagation()}
@@ -1743,7 +2908,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                 <div>
                   <div className="mb-2 inline-flex items-center gap-2 rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">
                     <PlusCircle className="h-3.5 w-3.5 text-brand-ink" />
-                    Add Version
+                    Добавить версию
                   </div>
                   <h2 className="text-xl font-semibold tracking-tight text-brand-ink">Новая версия</h2>
                   <p className="text-sm text-brand-muted">Добавь запись, файл или текстовый этап песни.</p>
@@ -1764,7 +2929,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                   onChange={(event) => setNewVersionType(event.target.value as DemoVersionType)}
                   className="border-brand-border bg-white/90 text-brand-ink focus:ring-brand-border"
                 >
-                  <option value="IDEA_TEXT">Идея (текст)</option>
+                  <option value="IDEA_TEXT">Идея</option>
                   <option value="DEMO">Демо</option>
                   <option value="ARRANGEMENT">Продакшн</option>
                   <option value="NO_MIX">Запись без сведения</option>
@@ -1820,7 +2985,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                 )}
 
                 {newVersionType === "IDEA_TEXT" && (
-                  <p className="text-sm text-brand-muted">Для «Идея (текст)» добавляется только текст песни.</p>
+                  <p className="text-sm text-brand-muted">Для «Идеи» добавляется только текст песни.</p>
                 )}
 
                 <input
@@ -1862,43 +3027,66 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
 
                 {newVersionType !== "IDEA_TEXT" && (
                   <div className="space-y-2">
-                    <p className="text-sm font-medium text-brand-ink">Комментарий к версии</p>
-                    {editingNewVersionComment ? (
-                      <div className="space-y-2">
-                        <Textarea
-                          value={newVersionComment}
-                          onChange={(event) => setNewVersionComment(event.target.value)}
-                          placeholder="Комментарий к версии"
-                          rows={4}
-                          className="border-brand-border bg-white/90 text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
-                        />
-                        <Button
-                          variant="secondary"
-                          className="border-brand-border bg-white/85 text-brand-ink hover:bg-white"
-                          onClick={() => setEditingNewVersionComment(false)}
-                        >
-                          Готово
-                        </Button>
-                      </div>
-                    ) : newVersionComment.trim() ? (
-                      <button
-                        type="button"
-                        className="w-full rounded-xl border border-brand-border bg-white/75 px-3 py-2 text-left text-sm text-brand-ink"
-                        onClick={() => setEditingNewVersionComment(true)}
-                      >
-                        {newVersionComment}
-                      </button>
-                    ) : (
-                      <Button
-                        variant="secondary"
-                        className="border-brand-border bg-white/85 text-brand-ink hover:bg-white"
-                        onClick={() => setEditingNewVersionComment(true)}
-                      >
-                        Добавить комментарий
-                      </Button>
-                    )}
+                    <p className="text-sm font-medium text-brand-ink">Контекст версии</p>
+                    <Textarea
+                      value={newVersionWhyMade}
+                      onChange={(event) => setNewVersionWhyMade(event.target.value)}
+                      placeholder="Зачем делал эту версию"
+                      rows={3}
+                      className="border-brand-border bg-white/90 text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
+                    />
+                    <Textarea
+                      value={newVersionWhatChanged}
+                      onChange={(event) => setNewVersionWhatChanged(event.target.value)}
+                      placeholder="Что изменил в этой версии"
+                      rows={3}
+                      className="border-brand-border bg-white/90 text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
+                    />
+                    <Textarea
+                      value={newVersionWhatNotWorking}
+                      onChange={(event) => setNewVersionWhatNotWorking(event.target.value)}
+                      placeholder="Что не устроило или осталось нерешённым"
+                      rows={3}
+                      className="border-brand-border bg-white/90 text-brand-ink placeholder:text-brand-muted focus:ring-brand-border"
+                    />
                   </div>
                 )}
+
+                {newVersionType !== "IDEA_TEXT" && pendingNextVersionItems.length ? (
+                  <div className="space-y-2 rounded-2xl border border-brand-border bg-[#eef5fb] p-3 shadow-sm">
+                    <div>
+                      <p className="text-sm font-semibold text-brand-ink">Проверить в этой версии</p>
+                      <p className="mt-1 text-xs text-brand-muted">
+                        Выбери пункты фидбека со статусом «Проверить в следующей версии», которые закрываешь этим апдейтом.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      {pendingNextVersionItems.map((entry) => (
+                        <label
+                          key={entry.item.id}
+                          className="flex items-start gap-3 rounded-2xl border border-brand-border bg-white/90 px-3 py-3 text-sm text-brand-ink"
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-1 h-4 w-4 rounded border-brand-border"
+                            checked={selectedFeedbackItemIdsForVersion.includes(entry.item.id)}
+                            onChange={(event) =>
+                              setSelectedFeedbackItemIdsForVersion((prev) =>
+                                event.target.checked ? [...prev, entry.item.id] : prev.filter((id) => id !== entry.item.id)
+                              )
+                            }
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-xs uppercase tracking-[0.12em] text-brand-muted">
+                              {entry.requestTypeLabel} • {entry.item.categoryLabel}
+                            </span>
+                            <span className="mt-1 block">{entry.item.body}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 {versionError && (
                   <div className="rounded-xl border border-red-300/70 bg-[#fff2ef] px-3 py-2 text-sm text-[#a4372a] shadow-sm">
@@ -1933,7 +3121,7 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
           className="fixed inset-0 z-[80] bg-[#182019]/45 backdrop-blur-md"
           onClick={() => setShowDistributionModal(false)}
         >
-          <div className="flex min-h-full items-end justify-center p-3 md:items-center md:p-6">
+          <div className="flex min-h-full items-start justify-center p-3 pt-16 md:items-center md:p-6">
             <div
               className="relative max-h-[calc(100vh-2rem)] w-full max-w-3xl overflow-y-auto rounded-[24px] border border-brand-border bg-[#f7fbf2] p-4 shadow-[0_28px_70px_rgba(61,84,46,0.24)] md:p-5"
               onClick={(event) => event.stopPropagation()}
@@ -2165,6 +3353,334 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
           </div>
         </div>
       )}
+
+      <Modal
+        open={showCreateFeedbackModal}
+        onClose={() => setShowCreateFeedbackModal(false)}
+        title="Запросить фидбек"
+        description="Зафиксируй получателя, контекст и то, что именно хочешь проверить."
+        widthClassName="max-w-2xl"
+        actions={[
+          {
+            label: "Отмена",
+            variant: "secondary",
+            onClick: () => setShowCreateFeedbackModal(false),
+            disabled: creatingFeedbackRequest
+          },
+          {
+            label: creatingFeedbackRequest ? "Сохраняем..." : "Создать запрос",
+            onClick: () => void submitFeedbackRequest(),
+            disabled:
+              creatingFeedbackRequest ||
+              (feedbackRequestType !== "TEXT" && !feedbackRequestDemoId) ||
+              (feedbackRecipientMode === "INTERNAL_USER" && !feedbackRecipientSafeId.trim()) ||
+              (feedbackRecipientMode === "EXTERNAL_CONTACT" && !feedbackRecipientLabel.trim()) ||
+              (feedbackRecipientMode === "COMMUNITY" &&
+                (!feedbackCommunityTitle.trim() || !feedbackRequestMessage.trim() || feedbackSupportNeedTypes.length === 0))
+          }
+        ]}
+      >
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-brand-ink">Тип фидбека</p>
+            <Select
+              value={feedbackRequestType}
+              onChange={(event) => setFeedbackRequestType(event.target.value as FeedbackRequestType)}
+              className="bg-white"
+            >
+              {feedbackTypeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          {feedbackRequestType === "TEXT" ? (
+            <div className="rounded-2xl border border-brand-border bg-[#fbfdf7] p-3">
+              <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Snapshot текста</p>
+              <p className="mt-2 whitespace-pre-wrap text-sm text-brand-ink">
+                {track.lyricsText?.trim() || "Текст песни пока не добавлен."}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-brand-ink">Версия для запроса</p>
+              <Select
+                value={feedbackRequestDemoId}
+                onChange={(event) => setFeedbackRequestDemoId(event.target.value)}
+                className="bg-white"
+              >
+                {feedbackSelectableDemos.map((demo) => (
+                  <option key={demo.id} value={demo.id}>
+                    {versionTypeLabels[demo.versionType]} • {formatDate(demo.createdAt)}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-brand-ink">Куда отправляешь</p>
+            <Select
+              value={feedbackRecipientMode}
+              onChange={(event) => setFeedbackRecipientMode(event.target.value as FeedbackRecipientMode)}
+              className="bg-white"
+            >
+              <option value="EXTERNAL_CONTACT">Внешний контакт</option>
+              <option value="INTERNAL_USER">Внутри продукта</option>
+              <option value="COMMUNITY">В community</option>
+            </Select>
+          </div>
+
+          {feedbackRecipientMode === "INTERNAL_USER" ? (
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-brand-ink">SAFE ID</p>
+              <Input
+                value={feedbackRecipientSafeId}
+                onChange={(event) => setFeedbackRecipientSafeId(event.target.value)}
+                placeholder="SAFE ID получателя"
+                className="bg-white"
+              />
+            </div>
+          ) : feedbackRecipientMode === "COMMUNITY" ? (
+            <div className="space-y-3 rounded-2xl border border-brand-border bg-[#f7fbf2] p-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-brand-ink">Заголовок карточки в community</p>
+                <Input
+                  value={feedbackCommunityTitle}
+                  onChange={(event) => setFeedbackCommunityTitle(event.target.value)}
+                  placeholder="Например: нужен взгляд на припев и динамику второго куплета"
+                  className="bg-white"
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-brand-ink">Какая реакция будет полезной</p>
+                <Input
+                  value={feedbackCommunityHelpfulActionPrompt}
+                  onChange={(event) => setFeedbackCommunityHelpfulActionPrompt(event.target.value)}
+                  placeholder="Например: особенно нужен взгляд на считываемость припева"
+                  className="bg-white"
+                />
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-brand-ink">Какой тип помощи нужен</p>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(supportNeedTypeLabels).map(([value, label]) => {
+                    const typedValue = value as ArtistSupportNeedType;
+                    const selected = feedbackSupportNeedTypes.includes(typedValue);
+                    return (
+                      <button
+                        key={typedValue}
+                        type="button"
+                        className={`rounded-full border px-3 py-1 text-xs ${
+                          selected ? "border-brand-ink bg-white text-brand-ink" : "border-brand-border bg-[#eef4e6] text-brand-muted"
+                        }`}
+                        onClick={() =>
+                          setFeedbackSupportNeedTypes((prev) =>
+                            prev.includes(typedValue) ? prev.filter((item) => item !== typedValue) : [...prev, typedValue]
+                          )
+                        }
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-brand-ink">Имя</p>
+                <Input
+                  value={feedbackRecipientLabel}
+                  onChange={(event) => setFeedbackRecipientLabel(event.target.value)}
+                  placeholder="Кому отправляешь"
+                  className="bg-white"
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-brand-ink">Канал</p>
+                <Input
+                  value={feedbackRecipientChannel}
+                  onChange={(event) => setFeedbackRecipientChannel(event.target.value)}
+                  placeholder="Telegram / чат / почта"
+                  className="bg-white"
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-brand-ink">Контакт</p>
+                <Input
+                  value={feedbackRecipientContact}
+                  onChange={(event) => setFeedbackRecipientContact(event.target.value)}
+                  placeholder="@username / email / ссылка"
+                  className="bg-white"
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-brand-ink">Что именно хочешь проверить</p>
+            <Textarea
+              value={feedbackRequestMessage}
+              onChange={(event) => setFeedbackRequestMessage(event.target.value)}
+              placeholder="Например: считывается ли припев и не проседает ли второй куплет"
+              rows={4}
+              className="bg-white"
+            />
+          </div>
+
+          {feedbackRequestError ? (
+            <div className="rounded-xl border border-red-300/70 bg-[#fff2ef] px-3 py-2 text-sm text-[#a4372a] shadow-sm">
+              {feedbackRequestError}
+            </div>
+          ) : null}
+        </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(responseModalRequest)}
+        onClose={() => setResponseModalRequestId("")}
+        title={responseModalRequest ? `Ответ на запрос: ${responseModalRequest.typeLabel}` : "Ответ на запрос"}
+        description="Один тезис на строку. Продукт разложит ответ на отдельные пункты."
+        widthClassName="max-w-3xl"
+        actions={[
+          {
+            label: "Отмена",
+            variant: "secondary",
+            onClick: () => setResponseModalRequestId(""),
+            disabled: Boolean(submittingFeedbackResponseId)
+          },
+          {
+            label: submittingFeedbackResponseId ? "Сохраняем..." : "Сохранить ответ",
+            onClick: () => (responseModalRequest ? void submitFeedbackResponse(responseModalRequest.id) : undefined),
+            disabled: Boolean(submittingFeedbackResponseId) || !responseModalRequest
+          }
+        ]}
+      >
+        {responseModalRequest ? (
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-brand-border bg-[#fbfdf7] p-3 text-sm text-brand-muted">
+              <p className="font-medium text-brand-ink">{responseModalRequest.recipient.label}</p>
+              <p className="mt-1">
+                {responseModalRequest.demoRef
+                  ? `${versionTypeLabels[responseModalRequest.demoRef.versionType]} • ${formatDate(responseModalRequest.demoRef.createdAt)}`
+                  : "Snapshot текста"}
+              </p>
+              {responseModalRequest.requestMessage ? (
+                <p className="mt-2 text-brand-ink">{responseModalRequest.requestMessage}</p>
+              ) : null}
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-brand-ink">Что работает</p>
+                <Textarea
+                  value={getFeedbackResponseDraft(responseModalRequest.id).whatWorks}
+                  onChange={(event) =>
+                    setFeedbackResponseDrafts((prev) => ({
+                      ...prev,
+                      [responseModalRequest.id]: {
+                        ...getFeedbackResponseDraft(responseModalRequest.id),
+                        whatWorks: event.target.value
+                      }
+                    }))
+                  }
+                  rows={6}
+                  className="bg-white"
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-brand-ink">Что не считывается</p>
+                <Textarea
+                  value={getFeedbackResponseDraft(responseModalRequest.id).notReading}
+                  onChange={(event) =>
+                    setFeedbackResponseDrafts((prev) => ({
+                      ...prev,
+                      [responseModalRequest.id]: {
+                        ...getFeedbackResponseDraft(responseModalRequest.id),
+                        notReading: event.target.value
+                      }
+                    }))
+                  }
+                  rows={6}
+                  className="bg-white"
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-brand-ink">Где проседает</p>
+                <Textarea
+                  value={getFeedbackResponseDraft(responseModalRequest.id).sags}
+                  onChange={(event) =>
+                    setFeedbackResponseDrafts((prev) => ({
+                      ...prev,
+                      [responseModalRequest.id]: {
+                        ...getFeedbackResponseDraft(responseModalRequest.id),
+                        sags: event.target.value
+                      }
+                    }))
+                  }
+                  rows={6}
+                  className="bg-white"
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-brand-ink">Что хочется услышать дальше</p>
+                <Textarea
+                  value={getFeedbackResponseDraft(responseModalRequest.id).wantToHearNext}
+                  onChange={(event) =>
+                    setFeedbackResponseDrafts((prev) => ({
+                      ...prev,
+                      [responseModalRequest.id]: {
+                        ...getFeedbackResponseDraft(responseModalRequest.id),
+                        wantToHearNext: event.target.value
+                      }
+                    }))
+                  }
+                  rows={6}
+                  className="bg-white"
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+
+      <Modal
+        open={Boolean(moveTrackPrompt)}
+        onClose={() => setMoveTrackPrompt(null)}
+        title="Переместить трек"
+        description={
+          moveTrackPrompt
+            ? `Укажи новую позицию для «${currentTitle}» (1-${moveTrackPrompt.total}).`
+            : undefined
+        }
+        actions={[
+          {
+            label: "Отмена",
+            variant: "secondary",
+            onClick: () => setMoveTrackPrompt(null),
+            disabled: movingTrackInProject
+          },
+          {
+            label: movingTrackInProject ? "Сохраняем..." : "Сохранить",
+            onClick: () => void submitMoveCurrentTrackInProject(),
+            disabled: movingTrackInProject
+          }
+        ]}
+      >
+        <Input
+          value={moveTrackPrompt?.value ?? ""}
+          onChange={(event) =>
+            setMoveTrackPrompt((prev) => (prev ? { ...prev, value: event.target.value } : prev))
+          }
+          inputMode="numeric"
+          placeholder="Позиция"
+          className="bg-white"
+        />
+      </Modal>
       </div>
     </div>
   );

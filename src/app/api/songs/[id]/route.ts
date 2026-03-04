@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
-import { DemoVersionType } from "@prisma/client";
+import { DemoVersionType, TrackWorkbenchState } from "@prisma/client";
 import { z } from "zod";
 
 import { apiError, parseJsonBody, withApiHandler } from "@/lib/api";
+import { getIdentityProfile } from "@/lib/artist-growth";
+import { createTrackReturnedAchievement } from "@/lib/community/achievements";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
-import { canonicalizeSongStage } from "@/lib/song-stages";
+import { serializeTrackDetail, trackDetailInclude } from "@/lib/track-workbench";
 
 const updateTrackSchema = z.object({
   title: z.string().min(1).max(120).optional(),
@@ -13,37 +15,53 @@ const updateTrackSchema = z.object({
   projectId: z.string().optional(),
   primaryDemoId: z.string().optional().nullable(),
   pathStageId: z.number().int().optional().nullable(),
-  lyricsText: z.string().max(10000).optional().nullable()
+  lyricsText: z.string().max(10000).optional().nullable(),
+  workbenchState: z.nativeEnum(TrackWorkbenchState).optional(),
+  trackIntent: z
+    .object({
+      summary: z.string().trim().min(1).max(300),
+      whyNow: z.string().trim().max(600).optional().nullable()
+    })
+    .nullable()
+    .optional()
 });
 
 export const GET = withApiHandler(async (_: Request, { params }: { params: { id: string } }) => {
   const user = await requireUser();
 
-  const track = await prisma.track.findFirst({
-    where: { id: params.id, userId: user.id },
-    include: {
-      folder: true,
-      project: true,
-      primaryDemo: true,
-      pathStage: true,
-      demos: { orderBy: { createdAt: "desc" } }
-    }
-  });
+  const [track, identityProfile, primaryGoal] = await Promise.all([
+    prisma.track.findFirst({
+      where: { id: params.id, userId: user.id },
+      include: trackDetailInclude
+    }),
+    getIdentityProfile(prisma, user.id),
+    prisma.artistGoal.findFirst({
+      where: {
+        userId: user.id,
+        status: "ACTIVE",
+        isPrimary: true
+      },
+      select: { id: true }
+    })
+  ]);
 
   if (!track) {
     throw apiError(404, "Track not found");
   }
 
-  return NextResponse.json({
-    ...track,
-      pathStage: track.pathStage ? canonicalizeSongStage(track.pathStage) : null
-  });
+  return NextResponse.json(
+    serializeTrackDetail(track, {
+      identityProfile,
+      primaryGoalId: primaryGoal?.id ?? null
+    })
+  );
 });
 
 export const PATCH = withApiHandler(async (request: Request, { params }: { params: { id: string } }) => {
   const user = await requireUser();
   const body = await parseJsonBody(request, updateTrackSchema);
   const track = await prisma.track.findFirst({ where: { id: params.id, userId: user.id } });
+  const existingTrackIntent = await prisma.trackIntent.findUnique({ where: { trackId: params.id } });
   let resolvedFolderId = body.folderId;
 
   if (!track) {
@@ -106,6 +124,13 @@ export const PATCH = withApiHandler(async (request: Request, { params }: { param
   }
 
   const updatedTrack = await prisma.$transaction(async (tx) => {
+    const willChangeLyrics = body.lyricsText !== undefined && (body.lyricsText?.trim() || null) !== track.lyricsText;
+    const willChangeIntent =
+      body.trackIntent !== undefined &&
+      (body.trackIntent === null ||
+        body.trackIntent.summary.trim() !== existingTrackIntent?.summary ||
+        (body.trackIntent.whyNow?.trim() || null) !== existingTrackIntent?.whyNow);
+
     const nextTrack = await tx.track.update({
       where: { id: params.id },
       data: {
@@ -114,16 +139,34 @@ export const PATCH = withApiHandler(async (request: Request, { params }: { param
         projectId: body.projectId === undefined ? undefined : body.projectId,
         primaryDemoId: body.primaryDemoId === undefined ? undefined : body.primaryDemoId,
         pathStageId: body.pathStageId === undefined ? undefined : body.pathStageId,
-        lyricsText: body.lyricsText === undefined ? undefined : body.lyricsText?.trim() || null
+        lyricsText: body.lyricsText === undefined ? undefined : body.lyricsText?.trim() || null,
+        workbenchState: body.workbenchState === undefined ? undefined : body.workbenchState
       },
       include: {
-        folder: true,
-        project: true,
-        primaryDemo: true,
-        pathStage: true,
-        demos: { orderBy: { createdAt: "desc" } }
+        project: true
       }
     });
+
+    if (body.trackIntent !== undefined) {
+      if (body.trackIntent === null) {
+        await tx.trackIntent.deleteMany({
+          where: { trackId: track.id }
+        });
+      } else {
+        await tx.trackIntent.upsert({
+          where: { trackId: track.id },
+          update: {
+            summary: body.trackIntent.summary.trim(),
+            whyNow: body.trackIntent.whyNow?.trim() || null
+          },
+          create: {
+            trackId: track.id,
+            summary: body.trackIntent.summary.trim(),
+            whyNow: body.trackIntent.whyNow?.trim() || null
+          }
+        });
+      }
+    }
 
     const projectIdsToTouch = new Set<string>();
     if (track.projectId) projectIdsToTouch.add(track.projectId);
@@ -150,13 +193,44 @@ export const PATCH = withApiHandler(async (request: Request, { params }: { param
       });
     }
 
-    return nextTrack;
+    const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
+    const shouldCreateReturnedAchievement =
+      (track.workbenchState === TrackWorkbenchState.DEFERRED || Date.now() - track.updatedAt.getTime() >= fourteenDaysMs) &&
+      (willChangeLyrics || willChangeIntent);
+
+    if (shouldCreateReturnedAchievement) {
+      await createTrackReturnedAchievement(tx, {
+        userId: user.id,
+        trackId: track.id,
+        trackTitle: nextTrack.title,
+        triggerLabel: willChangeLyrics ? "обновил текст" : "уточнил intent"
+      });
+    }
+
+    return tx.track.findUniqueOrThrow({
+      where: { id: params.id },
+      include: trackDetailInclude
+    });
   });
 
-  return NextResponse.json({
-    ...updatedTrack,
-    pathStage: updatedTrack.pathStage ? canonicalizeSongStage(updatedTrack.pathStage) : null
-  });
+  const [identityProfile, primaryGoal] = await Promise.all([
+    getIdentityProfile(prisma, user.id),
+    prisma.artistGoal.findFirst({
+      where: {
+        userId: user.id,
+        status: "ACTIVE",
+        isPrimary: true
+      },
+      select: { id: true }
+    })
+  ]);
+
+  return NextResponse.json(
+    serializeTrackDetail(updatedTrack, {
+      identityProfile,
+      primaryGoalId: primaryGoal?.id ?? null
+    })
+  );
 });
 
 export const DELETE = withApiHandler(async (_: Request, { params }: { params: { id: string } }) => {

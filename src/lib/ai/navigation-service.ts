@@ -22,7 +22,12 @@ const categoryHints: Array<{ category: FindCategory; patterns: RegExp[] }> = [
   { category: "PRODUCER", patterns: [/\b(продюсер|producer|аранж|arrangement)\b/i] },
   { category: "AUDIO_ENGINEER", patterns: [/\b(сведен|микс|mix|master|mastering|звукореж)\b/i] },
   { category: "RECORDING_STUDIO", patterns: [/\b(студи|recording|запись вокала|вокал)\b/i] },
-  { category: "PROMO_CREW", patterns: [/\b(промо|promo|маркетинг|релиз|smm|pr)\b/i] }
+  { category: "PROMO_CREW", patterns: [/\b(промо|promo|маркетинг|релиз|smm|pr)\b/i] },
+  { category: "COVER_ARTIST", patterns: [/\b(худож|иллюстр|illustrat|cover\s?art|artwork|обложк)\b/i] },
+  { category: "COVER_PHOTOGRAPHER", patterns: [/\b(фотограф|фото|photo|shoot|съемк|обложк)\b/i] },
+  { category: "VIDEOGRAPHER", patterns: [/\b(видеограф|reel|тизер|snippet|shorts|сниппет)\b/i] },
+  { category: "CLIP_PRODUCTION_TEAM", patterns: [/\b(клип|music\s?video|video\s?production|продакшн\s?команд|съемочн)\b/i] },
+  { category: "DESIGNER", patterns: [/\b(дизайн|designer|motion|моушн|обложк|промо|айдентик|визуал)\b/i] }
 ];
 
 function inferCategoriesFromObjective(objective: string): FindCategory[] {

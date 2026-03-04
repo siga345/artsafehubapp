@@ -22,15 +22,15 @@ export function DeleteFolderModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-3 backdrop-blur-sm md:items-center md:p-6" onClick={busy ? undefined : onCancel}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 p-3 pt-16 backdrop-blur-sm md:items-center md:p-6" onClick={busy ? undefined : onCancel}>
       <div
         className="w-full max-w-xl rounded-[28px] border border-white/10 bg-[#111317]/95 p-4 text-white shadow-[0_20px_60px_rgba(0,0,0,0.4)] backdrop-blur-xl"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-4 px-2">
-          <h3 className="text-2xl font-semibold tracking-tight">Are you sure?</h3>
+          <h3 className="text-2xl font-semibold tracking-tight">Подтверждение удаления</h3>
           <p className="mt-2 text-sm text-white/70">
-            This folder has content inside ({folderTitle}). Do you want to empty the folder instead?
+            В папке «{folderTitle}» есть контент. Можно очистить папку или удалить всё внутри.
           </p>
         </div>
 
@@ -41,7 +41,7 @@ export function DeleteFolderModal({
             onClick={onEmptyFolder}
             disabled={busy}
           >
-            Empty folder
+            Очистить папку
           </Button>
           <Button
             variant="secondary"
@@ -49,7 +49,7 @@ export function DeleteFolderModal({
             onClick={onDeleteEverything}
             disabled={busy}
           >
-            Delete everything
+            Удалить всё
           </Button>
           <Button
             variant="secondary"
@@ -57,7 +57,7 @@ export function DeleteFolderModal({
             onClick={onCancel}
             disabled={busy}
           >
-            Cancel
+            Отмена
           </Button>
         </div>
       </div>

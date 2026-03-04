@@ -17,7 +17,17 @@ export const specialistRecommendationSchema = z.object({
   specialistUserId: z.string().min(1),
   safeId: z.string().min(1),
   nickname: z.string().min(1),
-  category: z.enum(["PRODUCER", "AUDIO_ENGINEER", "RECORDING_STUDIO", "PROMO_CREW"]),
+  category: z.enum([
+    "PRODUCER",
+    "AUDIO_ENGINEER",
+    "RECORDING_STUDIO",
+    "PROMO_CREW",
+    "COVER_ARTIST",
+    "COVER_PHOTOGRAPHER",
+    "VIDEOGRAPHER",
+    "CLIP_PRODUCTION_TEAM",
+    "DESIGNER"
+  ]),
   score: z.number().min(0).max(1),
   rationale: z.string().min(1).max(500),
   contactTelegram: z.string().url().optional(),

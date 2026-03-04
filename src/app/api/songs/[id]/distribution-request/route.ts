@@ -10,6 +10,8 @@ import { z } from "zod";
 import { apiError, parseJsonBody, withApiHandler } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
+import { promoteUserToFormationStageIfOnSpark } from "@/lib/user-path-stage";
+import { createPathStageReachedAchievement, createReleaseReadyAchievement } from "@/lib/community/achievements";
 
 const createDistributionRequestSchema = z
   .object({
@@ -205,6 +207,33 @@ export const POST = withApiHandler(async (request: Request, { params }: { params
         data: { updatedAt: new Date() }
       });
     }
+
+    const wasPromoted = await promoteUserToFormationStageIfOnSpark(tx, user.id);
+    if (wasPromoted) {
+      const formationStage = await tx.pathStage.findFirst({
+        where: { order: 2 },
+        select: { id: true, name: true }
+      });
+      if (formationStage) {
+        await createPathStageReachedAchievement(tx, {
+          userId: user.id,
+          pathStageId: formationStage.id,
+          pathStageName: formationStage.name
+        });
+      }
+    }
+
+    const trackTitle = await tx.track.findUnique({
+      where: { id: track.id },
+      select: { title: true }
+    });
+
+    await createReleaseReadyAchievement(tx, {
+      userId: user.id,
+      trackId: track.id,
+      title: trackTitle?.title ?? body.releaseTitle.trim(),
+      sourceDemoId: masterDemo.id
+    });
 
     return upserted;
   });

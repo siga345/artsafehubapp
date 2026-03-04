@@ -54,15 +54,15 @@ export function WorkspaceFolderTile({
   return (
     <div
       {...tileProps}
-      className={`rounded-3xl bg-transparent p-0 shadow-none transition hover:-translate-y-0.5 ${dragClasses} ${tileProps?.className ?? ""}`}
+      className={`rounded-2xl bg-transparent p-0 shadow-none transition hover:-translate-y-0.5 md:rounded-3xl ${dragClasses} ${tileProps?.className ?? ""}`}
     >
       <Link href={`/songs/folders/${node.id}`} className="group block">
-        <div className="relative aspect-square overflow-visible rounded-2xl">
-          <div className="relative h-full w-full overflow-hidden rounded-2xl border border-brand-border/60 bg-[#1f2d23] shadow-sm transition-shadow group-hover:shadow-md">
+        <div className="relative aspect-square overflow-visible rounded-xl md:rounded-2xl">
+          <div className="relative h-full w-full overflow-hidden rounded-xl border border-brand-border/60 bg-[#1f2d23] shadow-sm transition-shadow group-hover:shadow-md md:rounded-2xl">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(217,249,157,0.28),transparent_55%),radial-gradient(circle_at_100%_100%,rgba(255,255,255,0.08),transparent_50%)]" />
-            <div className="absolute left-3 top-3 h-4 w-14 rounded-t-xl border border-white/15 border-b-0 bg-white/10" />
-            <div className="absolute left-3 right-3 top-6 bottom-3 overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-[1px]">
-              <div className="grid h-full w-full grid-cols-2 gap-2 p-3">
+            <div className="absolute left-2 top-2 h-3.5 w-12 rounded-t-lg border border-white/15 border-b-0 bg-white/10 md:left-3 md:top-3 md:h-4 md:w-14 md:rounded-t-xl" />
+            <div className="absolute bottom-2 left-2 right-2 top-5 overflow-hidden rounded-xl border border-white/10 bg-white/5 backdrop-blur-[1px] md:bottom-3 md:left-3 md:right-3 md:top-6 md:rounded-2xl">
+              <div className="grid h-full w-full grid-cols-2 gap-1 p-2 md:gap-2 md:p-3">
                 {preview.length ? (
                   preview.map((item) => (
                     <div
@@ -77,31 +77,31 @@ export function WorkspaceFolderTile({
               </div>
             </div>
 
-            <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-lg bg-black/25 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-white backdrop-blur">
-              <Folder className="h-3 w-3" />
-              Folder
+            <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-md bg-black/25 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white backdrop-blur md:rounded-lg md:px-2 md:py-1 md:text-[10px]">
+              <Folder className="h-2.5 w-2.5 md:h-3 md:w-3" />
+              Папка
             </div>
-            <div className="absolute bottom-4 left-4 right-4">
-              <div className="inline-flex max-w-full flex-col rounded-lg border border-white/15 bg-black/25 px-2.5 py-1.5 text-white backdrop-blur">
-                <p className="truncate text-base font-semibold leading-tight drop-shadow-sm">{node.title}</p>
-                <p className="mt-0.5 text-xs text-white/85 drop-shadow-sm">
-                  {node.itemCount} item{node.itemCount === 1 ? "" : "s"}
+            <div className="absolute bottom-2 left-2 right-2 md:bottom-4 md:left-4 md:right-4">
+              <div className="inline-flex max-w-full flex-col rounded-lg border border-white/15 bg-black/25 px-2 py-1 text-white backdrop-blur md:px-2.5 md:py-1.5">
+                <p className="truncate text-xs font-semibold leading-tight drop-shadow-sm md:text-base">{node.title}</p>
+                <p className="mt-0.5 text-[10px] text-white/85 drop-shadow-sm md:text-xs">
+                  {node.itemCount} эл.
                 </p>
               </div>
             </div>
           </div>
 
-          <div className="absolute right-3 top-3 z-10">
+          <div className="absolute right-2 top-2 z-10 md:right-3 md:top-3">
             <div className="relative">
               <button
                 type="button"
-                className="rounded-xl border border-white/25 bg-white/15 px-2 py-1 text-xs text-white shadow-sm backdrop-blur hover:bg-white/25"
+                className="grid h-10 w-10 place-items-center rounded-lg border border-white/25 bg-white/15 text-xs text-white shadow-sm backdrop-blur hover:bg-white/25 md:h-auto md:w-auto md:px-2 md:py-1"
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
                   onToggleMenu();
                 }}
-                aria-label="Folder actions"
+                aria-label="Действия папки"
               >
                 •••
               </button>

@@ -3,3 +3,6 @@ export * from "@/contracts/in-app-requests";
 export * from "@/contracts/ai-navigation";
 export * from "@/contracts/ai-support";
 export * from "@/contracts/reviews";
+export * from "@/contracts/community";
+export * from "@/contracts/feedback";
+export * from "@/contracts/recommendations";

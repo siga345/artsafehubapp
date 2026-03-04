@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { PlaybackIcon } from "@/components/songs/playback-icon";
 import { useSongsPlayback } from "@/components/songs/songs-playback-provider";
 import { playbackAccentButtonStyle } from "@/lib/songs-playback-helpers";
+import { cn } from "@/lib/utils";
 
 function formatClock(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
@@ -57,6 +60,7 @@ function rgbaFromHex(color: string, alpha: number) {
 const progressBars = buildMiniBars(42);
 
 export function SongsMiniPlayerDock() {
+  const pathname = usePathname();
   const {
     activeItem,
     playing,
@@ -64,10 +68,12 @@ export function SongsMiniPlayerDock() {
     duration,
     seek,
     toggle,
+    clear,
     openPlayerWindow
   } = useSongsPlayback();
 
   if (!activeItem) return null;
+  const hasSongsQuickAddFab = pathname === "/songs";
 
   const progress = duration > 0 ? currentTime / duration : 0;
   const playAccentStyle = playbackAccentButtonStyle(activeItem.cover);
@@ -76,9 +82,22 @@ export function SongsMiniPlayerDock() {
   const mutedTrackBarsColor = rgbaFromHex(mixHexColors(coverColorA, coverColorB, 0.5) || coverColorB, 0.28) || "#b9c5b2";
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-[5.7rem] z-40 px-3 md:bottom-[5.8rem] md:px-4">
-      <div className="pointer-events-auto mx-auto max-w-5xl rounded-[22px] border border-brand-border bg-[#f4f8ee]/95 p-2.5 text-brand-ink shadow-[0_16px_36px_rgba(61,84,46,0.16)] backdrop-blur md:p-3">
-        <div className="flex items-center gap-2 md:gap-3">
+    <div
+      className={cn(
+        "pointer-events-none fixed inset-x-0 bottom-[5.7rem] z-40 px-3 md:bottom-[5.8rem] md:px-4",
+        hasSongsQuickAddFab && "pr-[5.25rem] md:pr-4"
+      )}
+    >
+      <div className="pointer-events-auto relative mx-auto max-w-5xl rounded-[22px] border border-brand-border bg-[#f4f8ee]/95 p-2.5 text-brand-ink shadow-[0_16px_36px_rgba(61,84,46,0.16)] backdrop-blur md:p-3">
+        <button
+          type="button"
+          onClick={clear}
+          className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full border border-brand-border bg-white/90 text-brand-muted transition hover:bg-white hover:text-brand-ink"
+          aria-label="Закрыть плеер"
+        >
+          <X className="h-4 w-4" />
+        </button>
+        <div className="flex items-center gap-2 pr-9 md:gap-3">
           <button
             type="button"
             className="grid h-9 w-9 shrink-0 place-items-center rounded-full border shadow-[0_8px_16px_rgba(61,84,46,0.18)] hover:brightness-95 md:h-10 md:w-10"
@@ -100,7 +119,7 @@ export function SongsMiniPlayerDock() {
             }}
             role="button"
             tabIndex={0}
-            aria-label="Open full player"
+            aria-label="Открыть полный плеер"
           >
             <p className="truncate text-sm font-semibold leading-tight">{activeItem.title}</p>
             <p className="truncate text-[11px] text-brand-muted md:text-xs">{activeItem.subtitle}</p>

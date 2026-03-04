@@ -5,15 +5,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
-import { MultiTrackRecorder, type MultiTrackRecorderHandle } from "@/components/audio/multi-track-recorder";
+import {
+  MultiTrackRecorder,
+  type MultiTrackRecorderHandle
+} from "@/components/audio/multi-track-recorder";
 import { SongAnalysisBadges } from "@/components/songs/song-analysis-badges";
 import {
   SongProjectPickerStep,
   type ProjectOption,
   type ProjectSelectionMode
 } from "@/components/songs/song-project-picker-step";
+import { InlineActionMessage } from "@/components/ui/inline-action-message";
 import { Button } from "@/components/ui/button";
-import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
+import { useToast } from "@/components/ui/toast";
+import { apiFetch, apiFetchJson, readApiErrorMessage } from "@/lib/client-fetch";
 import {
   appendAudioAnalysisToFormData,
   detectAudioAnalysisMvp,
@@ -214,6 +219,7 @@ async function getAudioDurationSeconds(file: File): Promise<number> {
 }
 
 export default function NewDemoSongPage() {
+  const toast = useToast();
   const router = useRouter();
   const recorderRef = useRef<MultiTrackRecorderHandle | null>(null);
   const beatInputRef = useRef<HTMLInputElement | null>(null);
@@ -266,7 +272,7 @@ export default function NewDemoSongPage() {
   useEffect(() => {
     if (!draft) return;
     if (selectedStage && !isDemoSongStage(selectedStage.name)) {
-      setDraftError("В demo-flow передан этап, который не является «Демо».");
+      setDraftError("В демо-потоке передан этап, который не является «Демо».");
     }
   }, [draft, selectedStage]);
 
@@ -305,8 +311,7 @@ export default function NewDemoSongPage() {
       })
     });
     if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(payload?.error || "Не удалось создать проект.");
+      throw new Error(await readApiErrorMessage(response, "Не удалось создать проект."));
     }
     const created = (await response.json()) as { id: string };
     return created.id;
@@ -347,8 +352,7 @@ export default function NewDemoSongPage() {
         })
       });
       if (!trackResponse.ok) {
-        const payload = (await trackResponse.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(payload?.error || "Не удалось создать трек.");
+        throw new Error(await readApiErrorMessage(trackResponse, "Не удалось создать трек."));
       }
       const createdTrack = (await trackResponse.json()) as { id: string };
 
@@ -370,10 +374,10 @@ export default function NewDemoSongPage() {
 
       const uploadResponse = await apiFetch("/api/audio-clips", { method: "POST", body: formData });
       if (!uploadResponse.ok) {
-        const payload = (await uploadResponse.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(payload?.error || "Трек создан, но не удалось загрузить аудио.");
+        throw new Error(await readApiErrorMessage(uploadResponse, "Трек создан, но не удалось загрузить аудио."));
       }
 
+      toast.success("Демо сохранено.");
       clearNewSongFlowDraft();
       router.push(returnHref);
       router.refresh();
@@ -391,7 +395,12 @@ export default function NewDemoSongPage() {
     setPageError("");
     setRecorderError("");
     try {
-      await recorderRef.current?.importAudioLayerFromFile(file, { name: "Бит", volume: 0.9 });
+      await recorderRef.current?.importAudioLayerFromFile(file, {
+        name: "Бит",
+        volume: 0.9,
+        role: "beat",
+        autoDetectTempoKey: true
+      });
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Не удалось импортировать бит.");
     }
@@ -456,7 +465,7 @@ export default function NewDemoSongPage() {
   }
 
   if (!draft) {
-    return <p className="px-4 py-8 text-sm text-brand-muted">Загрузка demo-flow...</p>;
+    return <p className="px-4 py-8 text-sm text-brand-muted">Загрузка демо-потока...</p>;
   }
 
   const currentSourceLabel =
@@ -472,7 +481,7 @@ export default function NewDemoSongPage() {
         <div className="rounded-[28px] border border-brand-border bg-gradient-to-br from-[#edf4e4] via-[#e8f0de] to-[#e2ead7] p-4 shadow-[0_20px_45px_rgba(61,84,46,0.14)] md:p-5">
           <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">New Song / Demo</p>
+              <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Новая песня / демо</p>
               <h1 className="text-2xl font-semibold tracking-tight text-brand-ink">{draft.title}</h1>
               <p className="text-sm text-brand-muted">
                 Этап: {selectedStage?.name || demoStage?.name || "Демо"} • {draft.lyricsWasSkipped ? "текст пропущен" : "текст сохранён в черновике"}
@@ -496,11 +505,7 @@ export default function NewDemoSongPage() {
             </div>
           )}
 
-          {(pageError || recorderError) && (
-            <div className="mb-4 rounded-xl border border-red-300/70 bg-[#fff2ef] px-3 py-2 text-sm text-[#a4372a]">
-              {pageError || recorderError}
-            </div>
-          )}
+          {pageError || recorderError ? <InlineActionMessage message={pageError || recorderError} className="mb-4" /> : null}
 
           <div className="mb-4 flex flex-wrap gap-2">
             <Button
@@ -528,7 +533,7 @@ export default function NewDemoSongPage() {
               onClick={() => videoFileInputRef.current?.click()}
               disabled={saving || convertingVideo}
             >
-              {convertingVideo ? "Converting..." : "Convert video"}
+              {convertingVideo ? "Конвертируем..." : "Конвертировать видео"}
             </Button>
             <span className="self-center text-xs text-brand-muted">{currentSourceLabel}</span>
           </div>
@@ -609,7 +614,7 @@ export default function NewDemoSongPage() {
                 onNewProjectReleaseKindChange={setNewProjectReleaseKind}
                 singleTrackTitle={draft.title}
                 onConfirm={() => void saveDemoToProject()}
-                confirmLabel={audioSource?.kind === "record" ? "Сохранить demo (recorder)" : "Сохранить demo"}
+                confirmLabel="Сохранить демо"
                 busy={saving}
                 error={projectStepError}
                 allowNewProjectKindChoice
@@ -635,14 +640,10 @@ export default function NewDemoSongPage() {
                       : "Сохраним загруженный файл как демо-версию в текущий проект."}
                   </p>
                 </div>
-                {projectStepError && (
-                  <div className="rounded-xl border border-red-300/70 bg-[#fff2ef] px-3 py-2 text-sm text-[#a4372a]">
-                    {projectStepError}
-                  </div>
-                )}
+                {projectStepError ? <InlineActionMessage message={projectStepError} /> : null}
                 <div className="flex flex-wrap gap-2">
                   <Button disabled={saving} onClick={() => void saveDemoToProject()}>
-                    {saving ? "Сохраняем..." : audioSource?.kind === "record" ? "Сохранить demo (recorder)" : "Сохранить demo"}
+                    {saving ? "Сохраняем..." : "Сохранить демо"}
                   </Button>
                   <Button
                     variant="secondary"

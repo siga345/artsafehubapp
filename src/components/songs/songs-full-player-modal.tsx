@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward } from "lucide-react";
 
-import { SongsCircularAudioVisualizer } from "@/components/songs/songs-circular-audio-visualizer";
+import { SongsCircularAudioVisualizer, type SongsVisualizerIntensity } from "@/components/songs/songs-circular-audio-visualizer";
 import { useSongsPlayback } from "@/components/songs/songs-playback-provider";
 import { playbackAccentButtonStyle } from "@/lib/songs-playback-helpers";
 
@@ -55,6 +56,12 @@ function rgbaFromHex(color: string, alpha: number) {
 }
 
 const bars = buildBars(56);
+const PLAYER_VISUALIZER_INTENSITY: Partial<SongsVisualizerIntensity> = {
+  energy: 1.12,
+  motion: 1.08,
+  shake: 1,
+  trailFrames: 3
+};
 
 export function SongsFullPlayerModal() {
   const playback = useSongsPlayback();
@@ -151,14 +158,25 @@ export function SongsFullPlayerModal() {
               <p className="truncate text-sm text-brand-muted md:text-base">{activeItem.subtitle}</p>
               <p className="mt-1 text-xs text-brand-muted">{queue.length ? `Трек ${queueIndex + 1} из ${queue.length}` : "Одиночное воспроизведение"}</p>
             </div>
-            <button
-              type="button"
-              className="grid h-11 w-11 place-items-center rounded-2xl border border-brand-border bg-white/85 text-xl text-brand-ink hover:bg-white"
-              onClick={closePlayerWindow}
-              aria-label="Close player"
-            >
-              ×
-            </button>
+            <div className="flex items-center gap-2">
+              {activeItem.linkHref ? (
+                <Link
+                  href={activeItem.linkHref}
+                  onClick={closePlayerWindow}
+                  className="inline-flex h-11 items-center rounded-2xl border border-brand-border bg-white/85 px-3 text-sm font-medium text-brand-ink transition-colors hover:bg-white"
+                >
+                  Версии
+                </Link>
+              ) : null}
+              <button
+                type="button"
+                className="grid h-11 w-11 place-items-center rounded-2xl border border-brand-border bg-white/85 text-xl text-brand-ink hover:bg-white"
+                onClick={closePlayerWindow}
+                aria-label="Close player"
+              >
+                ×
+              </button>
+            </div>
           </div>
 
           <div className="relative mx-auto mb-5 flex min-h-[460px] w-full max-w-sm items-center justify-center p-3 md:min-h-[560px] md:p-5">
@@ -167,6 +185,7 @@ export function SongsFullPlayerModal() {
               playing={playing}
               coverStyle={coverStyle}
               coverColors={{ colorA: activeItem.cover?.colorA, colorB: activeItem.cover?.colorB }}
+              intensity={PLAYER_VISUALIZER_INTENSITY}
               className="max-w-[280px] md:max-w-[340px]"
             />
           </div>

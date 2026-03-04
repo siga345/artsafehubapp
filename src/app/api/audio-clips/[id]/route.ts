@@ -1,26 +1,42 @@
 import { NextResponse } from "next/server";
+import { RecommendationSource, TrackDecisionType } from "@prisma/client";
 import { z } from "zod";
 
 import { apiError, parseJsonBody, withApiHandler } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
+import { createTrackDecision } from "@/lib/recommendation-logging";
 import { requireUser } from "@/lib/server-auth";
+import { serializeVersionReflection } from "@/lib/track-workbench";
 
 const updateDemoSchema = z.object({
-  textNote: z.string().max(1000).optional().nullable()
+  textNote: z.string().max(1000).optional().nullable(),
+  versionReflection: z
+    .object({
+      whyMade: z.string().trim().max(1000).optional().nullable(),
+      whatChanged: z.string().trim().max(2000).optional().nullable(),
+      whatNotWorking: z.string().trim().max(2000).optional().nullable()
+    })
+    .optional()
 });
 
 export const GET = withApiHandler(async (_: Request, { params }: { params: { id: string } }) => {
   const user = await requireUser();
   const clip = await prisma.demo.findFirst({
     where: { id: params.id, track: { userId: user.id } },
-    include: { track: true }
+    include: { track: true, versionReflection: true }
   });
 
   if (!clip) {
     throw apiError(404, "Demo not found");
   }
 
-  return NextResponse.json(clip);
+  return NextResponse.json({
+    ...clip,
+    createdAt: clip.createdAt.toISOString(),
+    releaseDate: clip.releaseDate ? clip.releaseDate.toISOString().slice(0, 10) : null,
+    detectedAt: clip.detectedAt?.toISOString() ?? null,
+    versionReflection: serializeVersionReflection(clip.versionReflection, clip.textNote)
+  });
 });
 
 export const PATCH = withApiHandler(async (request: Request, { params }: { params: { id: string } }) => {
@@ -40,10 +56,49 @@ export const PATCH = withApiHandler(async (request: Request, { params }: { param
   });
 
   const updated = await prisma.$transaction(async (tx) => {
+    const reflectionPayload = body.versionReflection
+      ? {
+          whyMade: body.versionReflection.whyMade?.trim() || null,
+          whatChanged: body.versionReflection.whatChanged?.trim() || null,
+          whatNotWorking: body.versionReflection.whatNotWorking?.trim() || null
+        }
+      : null;
+    const hasReflectionFields = Boolean(
+      reflectionPayload &&
+        (reflectionPayload.whyMade || reflectionPayload.whatChanged || reflectionPayload.whatNotWorking)
+    );
+
     const next = await tx.demo.update({
       where: { id: params.id },
-      data: { textNote: body.textNote ?? null }
+      data: { textNote: body.textNote ?? null },
+      include: { versionReflection: true }
     });
+
+    if (body.versionReflection !== undefined) {
+      if (hasReflectionFields && reflectionPayload) {
+        await tx.versionReflection.upsert({
+          where: { demoId: params.id },
+          update: reflectionPayload,
+          create: {
+            demoId: params.id,
+            ...reflectionPayload
+          }
+        });
+        await createTrackDecision(tx, {
+          userId: user.id,
+          trackId: clip.trackId,
+          demoId: params.id,
+          type: TrackDecisionType.REFLECTION_CAPTURED,
+          source: RecommendationSource.MANUAL,
+          summary: reflectionPayload.whyMade || "Reflection captured",
+          reason: reflectionPayload.whatNotWorking || reflectionPayload.whatChanged || null
+        });
+      } else {
+        await tx.versionReflection.deleteMany({
+          where: { demoId: params.id }
+        });
+      }
+    }
 
     if (track) {
       await tx.track.update({
@@ -58,10 +113,19 @@ export const PATCH = withApiHandler(async (request: Request, { params }: { param
       }
     }
 
-    return next;
+    return tx.demo.findUniqueOrThrow({
+      where: { id: params.id },
+      include: { versionReflection: true }
+    });
   });
 
-  return NextResponse.json(updated);
+  return NextResponse.json({
+    ...updated,
+    createdAt: updated.createdAt.toISOString(),
+    releaseDate: updated.releaseDate ? updated.releaseDate.toISOString().slice(0, 10) : null,
+    detectedAt: updated.detectedAt?.toISOString() ?? null,
+    versionReflection: serializeVersionReflection(updated.versionReflection, updated.textNote)
+  });
 });
 
 export const DELETE = withApiHandler(async (_: Request, { params }: { params: { id: string } }) => {

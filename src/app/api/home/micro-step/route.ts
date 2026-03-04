@@ -1,3 +1,4 @@
+import { ArtistGoalStatus } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { apiError, withApiHandler } from "@/lib/api";
@@ -207,6 +208,21 @@ function normalizeMicroStepState(microStep: {
 export const POST = withApiHandler(async () => {
   const user = await requireUser();
   const today = toDateOnly(new Date());
+  const commandCenterEnabled = process.env.NEXT_PUBLIC_COMMAND_CENTER_ENABLED === "true";
+
+  if (commandCenterEnabled) {
+    const activePrimaryGoalCount = await prisma.artistGoal.count({
+      where: {
+        userId: user.id,
+        status: ArtistGoalStatus.ACTIVE,
+        isPrimary: true
+      }
+    });
+
+    if (activePrimaryGoalCount > 0) {
+      throw apiError(409, "Сегодняшний фокус теперь определяется главной целью, а не legacy micro-step.");
+    }
+  }
 
   const currentUser = await prisma.user.findUnique({
     where: { id: user.id },

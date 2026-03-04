@@ -7,6 +7,26 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/artsafehubapp_test?schema=public
+      NEXTAUTH_SECRET: ci-smoke-secret
+      NEXTAUTH_URL: http://127.0.0.1:3000
+      BASE_URL: http://127.0.0.1:3000
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: artsafehubapp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d artsafehubapp_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -18,3 +38,17 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+      - run: npx prisma migrate deploy
+      - run: npm run prisma:seed
+      - run: npm run start &
+      - name: Wait for app
+        run: |
+          for i in {1..60}; do
+            if curl -fsS "$BASE_URL/signin" >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "App did not start in time"
+          exit 1
+      - run: npm run test:e2e:smoke

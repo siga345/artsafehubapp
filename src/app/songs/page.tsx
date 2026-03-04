@@ -4,11 +4,13 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Disc3, FolderOpen, Music, Search, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Disc3, FolderOpen, Music, Plus, Search, SlidersHorizontal, Sparkles, X } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MultiTrackRecorder } from "@/components/audio/multi-track-recorder";
+import { LearnContextCard, type LearnContextCardAction } from "@/components/learn/learn-context-card";
 import { PlaybackIcon } from "@/components/songs/playback-icon";
 import { SongAnalysisBadges } from "@/components/songs/song-analysis-badges";
 import { SongProjectPickerStep, type ProjectSelectionMode } from "@/components/songs/song-project-picker-step";
@@ -17,9 +19,15 @@ import { WorkspaceBrowser } from "@/components/songs/workspace-browser";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { InlineActionMessage } from "@/components/ui/inline-action-message";
+import { Modal } from "@/components/ui/modal";
+import { OverlayPortal } from "@/components/ui/overlay-portal";
+import { useToast } from "@/components/ui/toast";
 import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
 import { appendAudioAnalysisToFormData, detectAudioAnalysisMvp, type UploadAudioAnalysisMeta } from "@/lib/audio/upload-analysis-client";
 import { buildProjectCoverStyle, projectDefaultCoverForKind } from "@/lib/project-cover-style";
+import { fetchLearnContext, postLearnProgress } from "@/lib/learn/client";
+import type { LearnContextBlock } from "@/lib/learn/types";
 import { pickPreferredPlaybackDemo, playbackAccentButtonStyle } from "@/lib/songs-playback-helpers";
 import { getProjectOpenHref, type ProjectReleaseKind } from "@/lib/songs-project-navigation";
 import {
@@ -33,6 +41,7 @@ import {
   isSelectableSongCreationStage,
   resolveVersionTypeByStage
 } from "@/lib/songs-version-stage-map";
+import type { IdentityBridgeStatus, TrackIdentityBridge } from "@/lib/id-integration";
 
 type Folder = {
   id: string;
@@ -112,10 +121,19 @@ type Track = {
     releaseTitle: string;
     releaseDate: string;
     status?: string;
+    masterDemo?: {
+      id: string;
+      createdAt: string;
+      duration?: number;
+      versionType?: DemoVersionType;
+    } | null;
   } | null;
   releaseDemo?: {
     id: string;
     createdAt: string;
+    audioUrl?: string | null;
+    duration?: number;
+    versionType?: DemoVersionType;
     releaseDate?: string | null;
   } | null;
   releaseArchiveMeta?: {
@@ -136,11 +154,41 @@ type Track = {
   displayKeyMode?: string | null;
   pathStageId: number | null;
   pathStage?: { id: number; name: string } | null;
+  workbenchState: "IN_PROGRESS" | "STUCK" | "NEEDS_FEEDBACK" | "DEFERRED" | "READY_FOR_NEXT_STEP";
+  workbenchStateLabel: string;
+  trackIntent?: {
+    summary: string;
+    whyNow?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  } | null;
+  activeNextStep?: {
+    id: string;
+    text: string;
+    reason?: string | null;
+    status: "ACTIVE" | "DONE" | "CANCELED";
+    source: "MANUAL" | "SYSTEM" | "AI";
+    origin: "SONG_DETAIL" | "MORNING_FOCUS" | "WRAP_UP";
+    createdAt?: string | null;
+    updatedAt?: string | null;
+  } | null;
+  latestDemo?: {
+    id: string;
+    audioUrl?: string | null;
+    duration?: number;
+    versionType?: DemoVersionType;
+    createdAt: string;
+    releaseDate?: string | null;
+  } | null;
+  latestWrapUpAt?: string | null;
+  latestVersionReflectionAt?: string | null;
+  identityBridge: TrackIdentityBridge;
   _count?: { demos: number };
 };
 
 type DemoVersionType = "IDEA_TEXT" | "DEMO" | "ARRANGEMENT" | "NO_MIX" | "MIXED" | "MASTERED" | "RELEASE";
 type SongFlowStep = "lyrics" | "stage" | "file-upload" | "project-pick";
+type SongsZone = "workspace" | "archive" | "quick-add";
 
 function normalizeStageName(name: string) {
   return name.toLowerCase().replace(/\s+/g, " ").trim();
@@ -189,6 +237,65 @@ function releaseKindLabelRu(value: "SINGLE" | "ALBUM" | null | undefined) {
   return "Релиз";
 }
 
+function formatStageOptionLabel(stage: PathStage) {
+  return resolveVersionTypeByStage(stage) === "NO_MIX" ? "Запись без сведения" : stage.name;
+}
+
+function getWorkbenchTone(workbenchState: Track["workbenchState"]) {
+  switch (workbenchState) {
+    case "STUCK":
+      return "border-amber-300/70 bg-amber-50 text-amber-900";
+    case "NEEDS_FEEDBACK":
+      return "border-sky-300/70 bg-sky-50 text-sky-900";
+    case "DEFERRED":
+      return "border-stone-300/70 bg-stone-100 text-stone-700";
+    case "READY_FOR_NEXT_STEP":
+      return "border-emerald-300/70 bg-emerald-50 text-emerald-900";
+    default:
+      return "border-lime-300/70 bg-lime-50 text-lime-900";
+  }
+}
+
+function getIdentityBridgeTone(status: IdentityBridgeStatus) {
+  switch (status) {
+    case "STRONG":
+      return "border-emerald-300/70 bg-emerald-50 text-emerald-900";
+    case "PARTIAL":
+      return "border-sky-300/70 bg-sky-50 text-sky-900";
+    case "WEAK":
+      return "border-amber-300/70 bg-amber-50 text-amber-900";
+    default:
+      return "border-stone-300/70 bg-stone-100 text-stone-700";
+  }
+}
+
+function getIdentityBridgeLabel(status: IdentityBridgeStatus) {
+  switch (status) {
+    case "STRONG":
+      return "ID strong";
+    case "PARTIAL":
+      return "ID partial";
+    case "WEAK":
+      return "ID weak";
+    default:
+      return "ID missing";
+  }
+}
+
+function getTrackIdentityPreview(track: Track) {
+  return (
+    track.identityBridge.supports.find((item) => item.kind === "theme")?.value ||
+    track.identityBridge.supports[0]?.value ||
+    track.identityBridge.warnings[0]?.title ||
+    "Связь с миром артиста пока не собрана."
+  );
+}
+
+function formatTrackActivity(track: Track) {
+  const value = track.latestDemo?.createdAt ?? track.latestVersionReflectionAt ?? track.latestWrapUpAt ?? track.updatedAt;
+  return formatDate(value);
+}
+
 function pluralizeRu(count: number, one: string, few: string, many: string) {
   const abs = Math.abs(count) % 100;
   const last = abs % 10;
@@ -223,16 +330,17 @@ async function getAudioDurationSeconds(file: File): Promise<number> {
 
 export default function SongsPage() {
   const router = useRouter();
+  const toast = useToast();
   const playback = useSongsPlayback();
-  const { data: tracks, refetch: refetchTracks } = useQuery({
+  const { data: tracks, refetch: refetchTracks, isLoading: tracksLoading } = useQuery({
     queryKey: ["songs-tracks"],
     queryFn: () => fetcher<Track[]>("/api/songs")
   });
-  const { data: folders, refetch: refetchFolders } = useQuery({
+  const { data: folders, refetch: refetchFolders, isLoading: foldersLoading } = useQuery({
     queryKey: ["songs-folders"],
     queryFn: () => fetcher<Folder[]>("/api/folders")
   });
-  const { data: projects, refetch: refetchProjects } = useQuery({
+  const { data: projects, refetch: refetchProjects, isLoading: projectsLoading } = useQuery({
     queryKey: ["songs-projects"],
     queryFn: () => fetcher<Project[]>("/api/projects")
   });
@@ -262,7 +370,30 @@ export default function SongsPage() {
   const [projectActionLoadingId, setProjectActionLoadingId] = useState("");
   const [projectCardPlayLoadingId, setProjectCardPlayLoadingId] = useState("");
   const [showLegacyLibrary, setShowLegacyLibrary] = useState(false);
-  const [showAddMenu, setShowAddMenu] = useState(false);
+  const [showSearchPanel, setShowSearchPanel] = useState(false);
+  const [showMobileQuickAddMenu, setShowMobileQuickAddMenu] = useState(false);
+  const [activeZone, setActiveZone] = useState<SongsZone>("workspace");
+  const [deleteFolderPrompt, setDeleteFolderPrompt] = useState<{
+    id: string;
+    title: string;
+    hasContent: boolean;
+    hasProjects: boolean;
+  } | null>(null);
+  const [assignProjectFolderPrompt, setAssignProjectFolderPrompt] = useState<{
+    id: string;
+    title: string;
+    value: string;
+  } | null>(null);
+  const [renameProjectPrompt, setRenameProjectPrompt] = useState<{
+    id: string;
+    initialTitle: string;
+    value: string;
+  } | null>(null);
+  const [deleteProjectPrompt, setDeleteProjectPrompt] = useState<{
+    id: string;
+    title: string;
+    hasTracks: boolean;
+  } | null>(null);
 
   const [showSongFlowModal, setShowSongFlowModal] = useState(false);
   const [songFlowStep, setSongFlowStep] = useState<SongFlowStep>("lyrics");
@@ -295,12 +426,17 @@ export default function SongsPage() {
   const [demoFile, setDemoFile] = useState<File | null>(null);
   const [demoFileAnalysis, setDemoFileAnalysis] = useState<UploadAudioAnalysisMeta | null>(null);
   const [demoVersionType, setDemoVersionType] = useState<DemoVersionType>("IDEA_TEXT");
+  const [demoProjectSelectionMode, setDemoProjectSelectionMode] = useState<ProjectSelectionMode>("existing");
+  const [demoSelectedProjectId, setDemoSelectedProjectId] = useState("");
+  const [demoNewProjectTitle, setDemoNewProjectTitle] = useState("");
+  const [demoNewProjectReleaseKind, setDemoNewProjectReleaseKind] = useState<ProjectReleaseKind>("SINGLE");
   const [savingDemo, setSavingDemo] = useState(false);
   const [demoError, setDemoError] = useState("");
 
   const [recordedMix, setRecordedMix] = useState<{ blob: Blob; durationSec: number; filename: string } | null>(null);
   const [recordedMixAnalysis, setRecordedMixAnalysis] = useState<UploadAudioAnalysisMeta | null>(null);
   const [recorderResetKey, setRecorderResetKey] = useState(0);
+  const isCreationOverlayOpen = showSongFlowModal || showDemoComposer || showCreateProject;
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const songFlowFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -375,6 +511,7 @@ export default function SongsPage() {
   );
   const foldersCount = folders?.length ?? 0;
   const tracksCount = tracks?.length ?? 0;
+  const songsDataLoading = tracksLoading || foldersLoading || projectsLoading;
   const releaseArchiveTracks = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return [...(tracks ?? [])]
@@ -400,6 +537,29 @@ export default function SongsPage() {
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
       .slice(0, 6);
   }, [filteredTracks]);
+  const workshopTracks = useMemo(() => {
+    return [...(filteredTracks ?? [])]
+      .filter((track) => track.workbenchState !== "DEFERRED" || track.activeNextStep)
+      .sort((left, right) => {
+        const leftHasActive = left.activeNextStep ? 1 : 0;
+        const rightHasActive = right.activeNextStep ? 1 : 0;
+        if (leftHasActive !== rightHasActive) return rightHasActive - leftHasActive;
+        const leftDeferred = left.workbenchState === "DEFERRED" ? 1 : 0;
+        const rightDeferred = right.workbenchState === "DEFERRED" ? 1 : 0;
+        if (leftDeferred !== rightDeferred) return leftDeferred - rightDeferred;
+        return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+      })
+      .slice(0, 8);
+  }, [filteredTracks]);
+  const learnAnchorTrack = workshopTracks[0] ?? recentTracks[0] ?? null;
+  const { data: songsLearnBlock, refetch: refetchSongsLearn } = useQuery<LearnContextBlock>({
+    queryKey: ["songs-learn-context", learnAnchorTrack?.id ?? "stage-only"],
+    queryFn: () =>
+      fetchLearnContext({
+        surface: "SONGS",
+        trackId: learnAnchorTrack?.id ?? null
+      })
+  });
 
   useEffect(() => {
     if (demoVersionType !== "DEMO" && demoMode === "record") {
@@ -409,24 +569,8 @@ export default function SongsPage() {
 
   useEffect(() => {
     const mappedStageId = findStageIdByVersionType(visibleStages, demoVersionType);
-    if (mappedStageId !== null) {
-      setDemoStageId(String(mappedStageId));
-    }
+    setDemoStageId(mappedStageId === null ? "NONE" : String(mappedStageId));
   }, [demoVersionType, visibleStages]);
-
-  useEffect(() => {
-    if (demoStageId === "NONE") return;
-    const currentStage = visibleStages.find((stage) => String(stage.id) === demoStageId);
-    if (!currentStage) return;
-    const stageName = normalizeStageName(currentStage.name);
-    if (stageName.includes("идея") && demoVersionType !== "IDEA_TEXT") {
-      setDemoVersionType("IDEA_TEXT");
-      return;
-    }
-    if (!stageName.includes("идея") && demoVersionType === "IDEA_TEXT") {
-      setDemoVersionType("DEMO");
-    }
-  }, [demoStageId, demoVersionType, visibleStages]);
 
   useEffect(() => {
     if (!showDemoComposer) return;
@@ -440,6 +584,8 @@ export default function SongsPage() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  // resetDemoComposer is intentionally omitted to keep a stable Escape listener while modal is open.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDemoComposer]);
 
   useEffect(() => {
@@ -447,13 +593,85 @@ export default function SongsPage() {
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        closeSongFlowModal();
+        setShowSongFlowModal(false);
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [showSongFlowModal]);
+
+  useEffect(() => {
+    if (!showCreateProject) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        closeCreateProjectPanel();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [newProjectReleaseKind, showCreateProject]);
+
+  useEffect(() => {
+    if (!showMobileQuickAddMenu) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setShowMobileQuickAddMenu(false);
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showMobileQuickAddMenu]);
+
+  useEffect(() => {
+    if (!isCreationOverlayOpen || !showMobileQuickAddMenu) return;
+    setShowMobileQuickAddMenu(false);
+  }, [isCreationOverlayOpen, showMobileQuickAddMenu]);
+
+  async function handleSongsLearnAction(materialSlug: string, action: LearnContextCardAction) {
+    try {
+      if (action.kind === "APPLY_TO_TRACK") {
+        await postLearnProgress(materialSlug, {
+          action: "APPLY",
+          surface: "SONGS",
+          targetType: "TRACK",
+          targetId: action.targetId,
+          recommendationContext: action.recommendationContext
+        });
+        toast.success("Материал привязан к треку.");
+      } else if (action.kind === "APPLY_TO_GOAL") {
+        await postLearnProgress(materialSlug, {
+          action: "APPLY",
+          surface: "SONGS",
+          targetType: "GOAL",
+          targetId: action.targetId,
+          recommendationContext: action.recommendationContext
+        });
+        toast.success("Материал привязан к цели.");
+      } else if (action.kind === "NOT_RELEVANT") {
+        await postLearnProgress(materialSlug, {
+          action: "NOT_RELEVANT",
+          surface: "SONGS",
+          recommendationContext: action.recommendationContext
+        });
+        toast.info("Материал скрыт из контекстной выдачи.");
+      } else {
+        await postLearnProgress(materialSlug, {
+          action: "LATER",
+          surface: "SONGS",
+          recommendationContext: action.recommendationContext
+        });
+        toast.info("Материал отложен на потом.");
+      }
+      await refetchSongsLearn();
+    } catch (error) {
+      setDemoError(error instanceof Error ? error.message : "Не удалось обновить Learn-материал.");
+    }
+  }
 
   function resetDemoComposer() {
     setRecordedMix(null);
@@ -468,6 +686,10 @@ export default function SongsPage() {
     setDemoFile(null);
     setDemoFileAnalysis(null);
     setDemoVersionType("IDEA_TEXT");
+    setDemoProjectSelectionMode((projects?.length ?? 0) > 0 ? "existing" : "new");
+    setDemoSelectedProjectId("");
+    setDemoNewProjectTitle("");
+    setDemoNewProjectReleaseKind("SINGLE");
     setDemoError("");
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -673,6 +895,7 @@ export default function SongsPage() {
 
       await refetchWorkspaceSurface();
       resetSongFlowModalState();
+      toast.success("Новая песня добавлена.");
     } catch (error) {
       setSongFlowError(error instanceof Error ? error.message : "Не удалось сохранить песню.");
     } finally {
@@ -800,6 +1023,7 @@ export default function SongsPage() {
       setNewFolderTitle("");
       setShowCreateFolder(false);
       await refetchFolders();
+      toast.success("Папка создана.");
     } catch (error) {
       setFolderActionError(error instanceof Error ? error.message : "Не удалось создать папку.");
     } finally {
@@ -830,10 +1054,9 @@ export default function SongsPage() {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error || "Не удалось создать проект.");
       }
-      setNewProjectTitle("");
-      setShowCreateProject(false);
-      setNewProjectReleaseKind("ALBUM");
+      closeCreateProjectPanel();
       await refetchProjects();
+      toast.success("Проект создан.");
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось создать проект.");
     } finally {
@@ -845,26 +1068,30 @@ export default function SongsPage() {
     const hasProjects = (folder._count?.projects ?? 0) > 0;
     const hasLegacyTracks = (folder._count?.tracks ?? 0) > 0;
     const hasContent = hasProjects || hasLegacyTracks;
-    if (hasContent) {
-      const confirmed = window.confirm(
-        hasProjects
-          ? "Папка не пустая. Удалить папку вместе со всеми проектами, треками и версиями внутри?"
-          : "Папка не пустая. Удалить папку вместе со всеми треками внутри?"
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
+    setDeleteFolderPrompt({
+      id: folder.id,
+      title: folder.title,
+      hasContent,
+      hasProjects
+    });
+  }
 
-    setDeletingFolderId(folder.id);
+  async function submitDeleteFolder() {
+    if (!deleteFolderPrompt) return;
+    setDeletingFolderId(deleteFolderPrompt.id);
     setFolderActionError("");
     try {
-      const response = await apiFetch(`/api/folders/${folder.id}${hasContent ? "?force=1" : ""}`, { method: "DELETE" });
+      const response = await apiFetch(
+        `/api/folders/${deleteFolderPrompt.id}${deleteFolderPrompt.hasContent ? "?force=1" : ""}`,
+        { method: "DELETE" }
+      );
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error || "Не удалось удалить папку.");
       }
       await Promise.all([refetchFolders(), refetchTracks(), refetchProjects()]);
+      toast.success("Папка удалена.");
+      setDeleteFolderPrompt(null);
     } catch (error) {
       setFolderActionError(error instanceof Error ? error.message : "Не удалось удалить папку.");
     } finally {
@@ -873,18 +1100,19 @@ export default function SongsPage() {
   }
 
   async function assignProjectToFolder(project: Project) {
-    const folderNames = (folders ?? []).map((folder) => folder.title);
-    const promptText = folderNames.length
-      ? `Название папки для проекта «${project.title}».\nОставь пусто, чтобы снять папку.\nСуществующие: ${folderNames.join(", ")}`
-      : `Название папки для проекта «${project.title}».\nПапок пока нет — введи название новой.`;
-    const input = window.prompt(promptText, project.folder?.title ?? "");
-    if (input === null) return;
-
-    const nextFolderTitle = input.trim();
-
-    setProjectActionLoadingId(project.id);
-    setProjectActionError("");
+    setAssignProjectFolderPrompt({
+      id: project.id,
+      title: project.title,
+      value: project.folder?.title ?? ""
+    });
     setProjectMenuId("");
+  }
+
+  async function submitAssignProjectToFolder() {
+    if (!assignProjectFolderPrompt) return;
+    const nextFolderTitle = assignProjectFolderPrompt.value.trim();
+    setProjectActionLoadingId(assignProjectFolderPrompt.id);
+    setProjectActionError("");
     try {
       let nextFolderId: string | null = null;
 
@@ -902,7 +1130,7 @@ export default function SongsPage() {
         }
       }
 
-      const response = await apiFetch(`/api/projects/${project.id}`, {
+      const response = await apiFetch(`/api/projects/${assignProjectFolderPrompt.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ folderId: nextFolderId })
@@ -913,6 +1141,8 @@ export default function SongsPage() {
       }
 
       await Promise.all([refetchProjects(), refetchFolders(), refetchTracks()]);
+      toast.success(nextFolderTitle ? "Проект перемещён в папку." : "Папка проекта очищена.");
+      setAssignProjectFolderPrompt(null);
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось обновить папку проекта.");
     } finally {
@@ -937,6 +1167,7 @@ export default function SongsPage() {
         throw new Error(payload?.error || "Не удалось убрать проект из папки.");
       }
       await Promise.all([refetchProjects(), refetchFolders(), refetchTracks()]);
+      toast.success("Проект убран из папки.");
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось убрать проект из папки.");
     } finally {
@@ -945,14 +1176,26 @@ export default function SongsPage() {
   }
 
   async function renameProject(project: Project) {
-    const nextTitle = window.prompt("Новое название проекта", project.title)?.trim();
-    if (!nextTitle || nextTitle === project.title) return;
-
-    setProjectActionLoadingId(project.id);
-    setProjectActionError("");
+    setRenameProjectPrompt({
+      id: project.id,
+      initialTitle: project.title,
+      value: project.title
+    });
     setProjectMenuId("");
+  }
+
+  async function submitProjectRename() {
+    if (!renameProjectPrompt) return;
+    const nextTitle = renameProjectPrompt.value.trim();
+    if (!nextTitle || nextTitle === renameProjectPrompt.initialTitle) {
+      setRenameProjectPrompt(null);
+      return;
+    }
+
+    setProjectActionLoadingId(renameProjectPrompt.id);
+    setProjectActionError("");
     try {
-      const response = await apiFetch(`/api/projects/${project.id}`, {
+      const response = await apiFetch(`/api/projects/${renameProjectPrompt.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: nextTitle })
@@ -962,6 +1205,8 @@ export default function SongsPage() {
         throw new Error(payload?.error || "Не удалось переименовать проект.");
       }
       await refetchProjects();
+      toast.success("Название проекта обновлено.");
+      setRenameProjectPrompt(null);
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось переименовать проект.");
     } finally {
@@ -971,23 +1216,30 @@ export default function SongsPage() {
 
   async function deleteProject(project: Project) {
     const hasTracks = (project._count?.tracks ?? 0) > 0;
-    const confirmed = window.confirm(
+    setDeleteProjectPrompt({
+      id: project.id,
+      title: project.title,
       hasTracks
-        ? "Проект не пустой. Удалить проект вместе со всеми песнями и версиями?"
-        : "Удалить пустой проект?"
-    );
-    if (!confirmed) return;
-
-    setProjectActionLoadingId(project.id);
-    setProjectActionError("");
+    });
     setProjectMenuId("");
+  }
+
+  async function submitDeleteProject() {
+    if (!deleteProjectPrompt) return;
+    setProjectActionLoadingId(deleteProjectPrompt.id);
+    setProjectActionError("");
     try {
-      const response = await apiFetch(`/api/projects/${project.id}${hasTracks ? "?force=1" : ""}`, { method: "DELETE" });
+      const response = await apiFetch(
+        `/api/projects/${deleteProjectPrompt.id}${deleteProjectPrompt.hasTracks ? "?force=1" : ""}`,
+        { method: "DELETE" }
+      );
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error || "Не удалось удалить проект.");
       }
       await Promise.all([refetchProjects(), refetchTracks(), refetchFolders()]);
+      toast.success("Проект удалён.");
+      setDeleteProjectPrompt(null);
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось удалить проект.");
     } finally {
@@ -1036,11 +1288,51 @@ export default function SongsPage() {
       }
 
       playback.playQueue(queue, 0, { type: "project", projectId: detail.id, title: detail.title });
+      toast.success(`Запущен плейлист проекта «${detail.title}».`);
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось запустить проект.");
     } finally {
       setProjectCardPlayLoadingId("");
     }
+  }
+
+  function playReleaseArchiveTrack(track: Track) {
+    const releaseDemo = track.releaseDemo ?? track.distributionRequest?.masterDemo ?? null;
+    if (!releaseDemo?.id) {
+      setProjectActionError("У этого релиза пока нет релизной аудио-версии для воспроизведения.");
+      return;
+    }
+
+    const releaseKind = track.releaseArchiveMeta?.releaseKind ?? track.project?.releaseKind ?? "SINGLE";
+    const archiveTitle = track.releaseArchiveMeta?.title || track.title;
+    const archiveArtist = track.releaseArchiveMeta?.artistName || track.project?.artistLabel || "ART SAFE";
+    const coverType = (track.releaseArchiveMeta?.coverType ?? track.project?.coverType) === "IMAGE" ? "image" : "gradient";
+
+    const item: SongsPlaybackItem = {
+      demoId: releaseDemo.id,
+      src: `/api/audio-clips/${releaseDemo.id}/stream`,
+      title: archiveTitle,
+      subtitle: `${archiveArtist} • ${releaseKind === "ALBUM" ? "Альбом" : "Сингл"}`,
+      linkHref: `/songs/${track.id}`,
+      durationSec: releaseDemo.duration ?? 0,
+      trackId: track.id,
+      projectId: track.project?.id ?? null,
+      versionType: releaseDemo.versionType ?? "RELEASE",
+      queueGroupType: "track",
+      queueGroupId: track.id,
+      cover: {
+        type: coverType,
+        imageUrl: track.releaseArchiveMeta?.coverImageUrl ?? track.project?.coverImageUrl ?? null,
+        colorA: track.releaseArchiveMeta?.coverColorA ?? track.project?.coverColorA ?? null,
+        colorB: track.releaseArchiveMeta?.coverColorB ?? track.project?.coverColorB ?? null
+      },
+      meta: {
+        projectTitle: track.project?.title ?? undefined,
+        pathStageName: track.pathStage?.name ?? "Релиз"
+      }
+    };
+
+    playback.toggle(item);
   }
 
   async function saveDemo() {
@@ -1056,8 +1348,42 @@ export default function SongsPage() {
         return;
       }
       if (demoVersionType === "IDEA_TEXT" && !demoText.trim()) {
-        setDemoError("Для типа «Идея (текст)» добавь текст песни.");
+        setDemoError("Для типа «Идея» добавь текст песни.");
         return;
+      }
+      let projectId = "";
+      if (demoProjectSelectionMode === "existing") {
+        if (!demoSelectedProjectId || demoSelectedProjectId === "NONE") {
+          setDemoError("Выберите проект.");
+          return;
+        }
+        projectId = demoSelectedProjectId;
+      } else {
+        if (!demoNewProjectTitle.trim()) {
+          setDemoError("Введите название нового проекта.");
+          return;
+        }
+
+        const defaults = projectDefaultCoverForKind(demoNewProjectReleaseKind);
+        const projectResponse = await apiFetch("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: demoNewProjectTitle.trim(),
+            releaseKind: demoNewProjectReleaseKind,
+            coverType: "GRADIENT",
+            coverPresetKey: defaults.coverPresetKey,
+            coverColorA: defaults.coverColorA,
+            coverColorB: defaults.coverColorB
+          })
+        });
+        if (!projectResponse.ok) {
+          const payload = (await projectResponse.json().catch(() => null)) as { error?: string } | null;
+          setDemoError(payload?.error || "Не удалось создать проект.");
+          return;
+        }
+        const createdProject = (await projectResponse.json()) as { id: string };
+        projectId = createdProject.id;
       }
 
       const createdTrack = await apiFetchJson<Track>("/api/songs", {
@@ -1066,7 +1392,7 @@ export default function SongsPage() {
         body: JSON.stringify({
           title: demoNewTrackTitle.trim(),
           lyricsText: demoText.trim() || null,
-          folderId: null,
+          projectId,
           pathStageId: selectedPathStageId
         })
       });
@@ -1076,6 +1402,7 @@ export default function SongsPage() {
         await Promise.all([refetchTracks(), refetchFolders(), refetchProjects()]);
         resetDemoComposer();
         setShowDemoComposer(false);
+        toast.success("Песня сохранена.");
         return;
       }
 
@@ -1126,6 +1453,7 @@ export default function SongsPage() {
       await Promise.all([refetchTracks(), refetchFolders(), refetchProjects()]);
       resetDemoComposer();
       setShowDemoComposer(false);
+      toast.success("Песня сохранена.");
     } catch (error) {
       setDemoError(error instanceof Error ? error.message : "Не удалось сохранить новую песню.");
     } finally {
@@ -1142,156 +1470,119 @@ export default function SongsPage() {
     setShowCreateProject(true);
   }
 
+  function closeCreateProjectPanel() {
+    setShowCreateProject(false);
+    setNewProjectTitle("");
+    setNewProjectReleaseKind("ALBUM");
+    setProjectActionError("");
+  }
+
+  const demoSourceReady =
+    demoVersionType === "IDEA_TEXT" || (demoMode === "upload" ? Boolean(demoFile) : Boolean(recordedMix));
+
   return (
-    <div className="space-y-6 pb-12">
-      <section className="relative overflow-visible rounded-3xl border border-brand-border bg-gradient-to-br from-[#f2f7e9] via-[#edf3e3] to-[#e6eedb] p-4 md:p-6">
+    <div className="space-y-4 pb-10 md:space-y-6 md:pb-12">
+      <section className="relative overflow-hidden rounded-[22px] border border-brand-border bg-gradient-to-br from-[#f2f7e9] via-[#edf3e3] to-[#e6eedb] p-3 md:rounded-3xl md:p-6">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(217,249,157,0.45),transparent_38%),radial-gradient(circle_at_100%_100%,rgba(42,52,44,0.08),transparent_46%)]" />
         <div className="pointer-events-none absolute -right-20 -top-20 h-48 w-48 rounded-full bg-[#8cae78]/25 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-20 left-1/3 h-52 w-52 rounded-full bg-[#b5cba2]/35 blur-3xl" />
-        <div className="relative space-y-4">
+        <div className="relative space-y-3 md:space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="mb-2 inline-flex items-center gap-2 rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">
-                <span className="-rotate-6 inline-flex h-5 w-5 items-center justify-center rounded-md border border-brand-border bg-white shadow-[0_1px_0_rgba(42,52,44,0.08)]">
+              <div className="mb-1.5 inline-flex items-center gap-2 rounded-lg border border-brand-border bg-white/85 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-muted md:mb-2 md:rounded-xl md:px-2.5 md:py-1 md:text-xs">
+                <span className="-rotate-6 inline-flex h-4 w-4 items-center justify-center rounded-md border border-brand-border bg-white shadow-[0_1px_0_rgba(42,52,44,0.08)] md:h-5 md:w-5">
                   <Music className="h-3 w-3 text-brand-ink" />
                 </span>
-                Songs
+                Песни
               </div>
-              <h1 className="text-2xl font-semibold tracking-tight text-brand-ink md:text-3xl">SONGS Workspace</h1>
+              <h1 className="text-xl font-semibold tracking-tight text-brand-ink md:text-3xl">Панель песен</h1>
             </div>
 
             <div className="relative">
               <Button
-                className="min-w-[132px] rounded-2xl px-5 shadow-sm"
-                onClick={() => setShowAddMenu((prev) => !prev)}
+                className="h-10 min-w-[112px] rounded-2xl px-4 text-sm shadow-sm md:h-11 md:min-w-[132px] md:px-5"
+                onClick={() => setShowSearchPanel((prev) => !prev)}
+                aria-expanded={showSearchPanel}
               >
-                + Add
+                Поиск
               </Button>
-              {showAddMenu && (
-                <div className="absolute left-1/2 top-12 z-30 w-[calc(100vw-2rem)] max-w-[22rem] -translate-x-1/2 overflow-hidden rounded-2xl border border-brand-border bg-white/95 p-2 shadow-[0_18px_48px_rgba(40,55,38,0.16)] backdrop-blur sm:left-auto sm:right-0 sm:w-auto sm:min-w-[220px] sm:max-w-none sm:translate-x-0">
-                  <div className="space-y-1">
-                    <button
-                      type="button"
-                      className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
-                      onClick={() => {
-                        setShowAddMenu(false);
-                        openNewSongWizard();
-                      }}
-                    >
-                      <span>Song</span>
-                      <span className="text-xs text-brand-muted">Новая песня</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
-                      onClick={() => {
-                        setShowAddMenu(false);
-                        openCreateProjectPanel("SINGLE");
-                      }}
-                    >
-                      <span>Single</span>
-                      <span className="text-xs text-brand-muted">Прямо в версии</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
-                      onClick={() => {
-                        setShowAddMenu(false);
-                        openCreateProjectPanel("ALBUM");
-                      }}
-                    >
-                      <span>Album</span>
-                      <span className="text-xs text-brand-muted">Страница проекта</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
-                      onClick={() => {
-                        setShowAddMenu(false);
-                        setShowCreateFolder((prev) => !prev);
-                        if (showCreateFolder) {
-                          setNewFolderTitle("");
-                        }
-                      }}
-                    >
-                      <span>Folder</span>
-                      <span className="text-xs text-brand-muted">{showCreateFolder ? "Скрыть" : "Новая"}</span>
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 
-          <div className="rounded-2xl border border-brand-border bg-white/70 p-3 shadow-sm backdrop-blur-sm">
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-              <label className="relative block">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-muted" />
-                <Input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Найти трек, проект или идею..."
-                  className="h-11 bg-white pl-9"
-                />
-              </label>
+          {showSearchPanel && (
+            <div className="rounded-xl border border-brand-border bg-white/70 p-2.5 shadow-sm backdrop-blur-sm md:rounded-2xl md:p-3">
+              <div className="grid gap-2.5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)] md:gap-3">
+                <label className="relative block">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-muted" />
+                  <Input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Найти трек, проект или идею..."
+                    className="h-10 bg-white pl-9 md:h-11"
+                  />
+                </label>
 
-              <label className="relative block">
-                <SlidersHorizontal className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-muted" />
-                <Select value={selectedStageId} onChange={(event) => setSelectedStageId(event.target.value)} className="h-11 bg-white pl-9">
-                  <option value="ALL">Все статусы</option>
-                  {visibleStages.map((stage) => (
-                    <option key={stage.id} value={String(stage.id)}>
-                      {stage.name}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-            </div>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
-                Поиск: <span className="ml-1 font-medium text-brand-ink">{query.trim() ? "активен" : "все"}</span>
-              </span>
-              <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
-                Статус:{" "}
-                <span className="ml-1 font-medium text-brand-ink">
-                  {selectedStageId === "ALL"
-                    ? "все"
-                    : visibleStages.find((stage) => String(stage.id) === selectedStageId)?.name ?? "фильтр"}
-                </span>
-              </span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:gap-3">
-            <div className="group relative overflow-hidden rounded-2xl border border-brand-border bg-white/82 p-3 shadow-sm">
-              <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#d9f99d] to-[#9ecf63]" />
-              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl border border-brand-border bg-[#edf4e5] text-brand-ink">
-                <FolderOpen className="h-4 w-4" />
+                <label className="relative block">
+                  <Select
+                    value={selectedStageId}
+                    onChange={(event) => setSelectedStageId(event.target.value)}
+                    className="h-10 bg-white md:h-11"
+                  >
+                    <option value="ALL">Все статусы</option>
+                    {visibleStages.map((stage) => (
+                      <option key={stage.id} value={String(stage.id)}>
+                        {stage.name}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
               </div>
-              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Папки</p>
-              <p className="text-xl font-semibold leading-none text-brand-ink sm:text-2xl">
+
+              <div className="mt-2 flex snap-x gap-2 overflow-x-auto pb-0.5 md:mt-3 md:flex-wrap md:overflow-visible md:pb-0">
+                <span className="inline-flex shrink-0 snap-start items-center rounded-lg border border-brand-border bg-white/85 px-2 py-0.5 text-[11px] text-brand-muted md:rounded-xl md:px-2.5 md:py-1 md:text-xs">
+                  Поиск: <span className="ml-1 font-medium text-brand-ink">{query.trim() ? "активен" : "все"}</span>
+                </span>
+                <span className="inline-flex shrink-0 snap-start items-center rounded-lg border border-brand-border bg-white/85 px-2 py-0.5 text-[11px] text-brand-muted md:rounded-xl md:px-2.5 md:py-1 md:text-xs">
+                  Статус:{" "}
+                  <span className="ml-1 font-medium text-brand-ink">
+                    {selectedStageId === "ALL"
+                      ? "все"
+                      : visibleStages.find((stage) => String(stage.id) === selectedStageId)?.name ?? "фильтр"}
+                  </span>
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-4 gap-1.5 md:gap-3">
+            <div className="group relative min-w-0 overflow-hidden rounded-xl border border-brand-border bg-white/82 p-2 shadow-sm sm:rounded-2xl sm:p-3">
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#d9f99d] to-[#9ecf63]" />
+              <div className="mb-1.5 inline-flex h-6 w-6 items-center justify-center rounded-lg border border-brand-border bg-[#edf4e5] text-brand-ink sm:mb-2 sm:h-8 sm:w-8 sm:rounded-xl">
+                <FolderOpen className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              </div>
+              <p className="text-[9px] uppercase tracking-[0.1em] text-brand-muted sm:text-xs sm:tracking-wider">Папки</p>
+              <p className="text-base font-semibold leading-none text-brand-ink sm:text-xl md:text-2xl">
                 <span>{foldersCount}</span>
-                <span className="ml-1 text-sm font-medium text-brand-muted sm:text-base">
+                <span className="ml-1 text-xs font-medium text-brand-muted sm:text-sm md:text-base">
                   {pluralizeRu(foldersCount, "папка", "папки", "папок")}
                 </span>
               </p>
             </div>
 
-            <div className="group relative overflow-hidden rounded-2xl border border-brand-border bg-white/82 p-3 shadow-sm">
+            <div className="group relative min-w-0 overflow-hidden rounded-xl border border-brand-border bg-white/82 p-2 shadow-sm sm:rounded-2xl sm:p-3">
               <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#dbeafe] to-[#93c5fd]" />
-              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl border border-brand-border bg-[#eef4fb] text-brand-ink">
-                <Disc3 className="h-4 w-4" />
+              <div className="mb-1.5 inline-flex h-6 w-6 items-center justify-center rounded-lg border border-brand-border bg-[#eef4fb] text-brand-ink sm:mb-2 sm:h-8 sm:w-8 sm:rounded-xl">
+                <Disc3 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               </div>
-              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Проекты</p>
+              <p className="text-[9px] uppercase tracking-[0.1em] text-brand-muted sm:text-xs sm:tracking-wider">Проекты</p>
               <div className="space-y-1">
-                <p className="text-sm leading-none text-brand-ink sm:text-base">
+                <p className="text-xs leading-none text-brand-ink sm:text-sm md:text-base">
                   <span className="font-semibold">{projectSinglesCount}</span>
                   <span className="ml-1 text-brand-muted">
                     {pluralizeRu(projectSinglesCount, "сингл", "сингла", "синглов")}
                   </span>
                 </p>
-                <p className="text-sm leading-none text-brand-ink sm:text-base">
+                <p className="text-xs leading-none text-brand-ink sm:text-sm md:text-base">
                   <span className="font-semibold">{projectAlbumsCount}</span>
                   <span className="ml-1 text-brand-muted">
                     {pluralizeRu(projectAlbumsCount, "альбом", "альбома", "альбомов")}
@@ -1300,34 +1591,34 @@ export default function SongsPage() {
               </div>
             </div>
 
-            <div className="group relative overflow-hidden rounded-2xl border border-brand-border bg-white/82 p-3 shadow-sm">
+            <div className="group relative min-w-0 overflow-hidden rounded-xl border border-brand-border bg-white/82 p-2 shadow-sm sm:rounded-2xl sm:p-3">
               <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#fde68a] to-[#f59e0b]" />
-              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl border border-brand-border bg-[#fff6dd] text-brand-ink">
-                <Music className="h-4 w-4" />
+              <div className="mb-1.5 inline-flex h-6 w-6 items-center justify-center rounded-lg border border-brand-border bg-[#fff6dd] text-brand-ink sm:mb-2 sm:h-8 sm:w-8 sm:rounded-xl">
+                <Music className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               </div>
-              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Треки</p>
-              <p className="text-xl font-semibold leading-none text-brand-ink sm:text-2xl">
+              <p className="text-[9px] uppercase tracking-[0.1em] text-brand-muted sm:text-xs sm:tracking-wider">Треки</p>
+              <p className="text-base font-semibold leading-none text-brand-ink sm:text-xl md:text-2xl">
                 <span>{tracksCount}</span>
-                <span className="ml-1 text-sm font-medium text-brand-muted sm:text-base">
+                <span className="ml-1 text-xs font-medium text-brand-muted sm:text-sm md:text-base">
                   {pluralizeRu(tracksCount, "трек", "трека", "треков")}
                 </span>
               </p>
             </div>
 
-            <div className="group relative overflow-hidden rounded-2xl border border-red-300/80 bg-white/82 p-3 shadow-sm">
+            <div className="group relative min-w-0 overflow-hidden rounded-xl border border-red-300/80 bg-white/82 p-2 shadow-sm sm:rounded-2xl sm:p-3">
               <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#fca5a5] to-[#ef4444]" />
-              <div className="mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl border border-red-200 bg-[#fff1f1] text-[#8b2626]">
-                <Sparkles className="h-4 w-4" />
+              <div className="mb-1.5 inline-flex h-6 w-6 items-center justify-center rounded-lg border border-red-200 bg-[#fff1f1] text-[#8b2626] sm:mb-2 sm:h-8 sm:w-8 sm:rounded-xl">
+                <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               </div>
-              <p className="text-[10px] uppercase tracking-[0.12em] text-brand-muted sm:text-xs sm:tracking-wider">Релизы</p>
+              <p className="text-[9px] uppercase tracking-[0.1em] text-brand-muted sm:text-xs sm:tracking-wider">Релизы</p>
               <div className="space-y-1">
-                <p className="text-sm leading-none text-brand-ink sm:text-base">
+                <p className="text-xs leading-none text-brand-ink sm:text-sm md:text-base">
                   <span className="font-semibold">{releaseSinglesCount}</span>
                   <span className="ml-1 text-brand-muted">
                     {pluralizeRu(releaseSinglesCount, "сингл", "сингла", "синглов")}
                   </span>
                 </p>
-                <p className="text-sm leading-none text-brand-ink sm:text-base">
+                <p className="text-xs leading-none text-brand-ink sm:text-sm md:text-base">
                   <span className="font-semibold">{releaseAlbumsCount}</span>
                   <span className="ml-1 text-brand-muted">
                     {pluralizeRu(releaseAlbumsCount, "альбом", "альбома", "альбомов")}
@@ -1339,7 +1630,47 @@ export default function SongsPage() {
         </div>
       </section>
 
-      {showCreateFolder && (
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant={activeZone === "workspace" ? "primary" : "secondary"}
+          className="h-10 rounded-xl px-4"
+          onClick={() => setActiveZone("workspace")}
+        >
+          Рабочая зона
+        </Button>
+        <Button
+          variant={activeZone === "archive" ? "primary" : "secondary"}
+          className="h-10 rounded-xl px-4"
+          onClick={() => setActiveZone("archive")}
+        >
+          Архив
+        </Button>
+      </div>
+
+      {activeZone === "quick-add" && (
+        <Card className="rounded-2xl">
+          <CardHeader>
+            <CardTitle>Быстрое добавление</CardTitle>
+            <CardDescription>Быстрые действия для нового контента.</CardDescription>
+          </CardHeader>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <Button className="h-11 rounded-xl" onClick={openNewSongWizard}>
+              Новая песня
+            </Button>
+            <Button className="h-11 rounded-xl" onClick={openNewSongRecorder}>
+              Новая демо-запись
+            </Button>
+            <Button className="h-11 rounded-xl" onClick={() => openCreateProjectPanel("SINGLE")}>
+              Новый сингл
+            </Button>
+            <Button className="h-11 rounded-xl" onClick={() => openCreateProjectPanel("ALBUM")}>
+              Новый альбом
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {activeZone === "quick-add" && showCreateFolder && (
         <Card className="rounded-2xl">
           <CardHeader>
             <CardTitle>Создать папку</CardTitle>
@@ -1367,76 +1698,162 @@ export default function SongsPage() {
         </Card>
       )}
 
-      {showCreateProject && (
-        <Card className="rounded-2xl">
-          <CardHeader>
-            <CardTitle>Создать {newProjectReleaseKind === "SINGLE" ? "single" : "album"}</CardTitle>
-            <CardDescription>
-              {newProjectReleaseKind === "SINGLE"
-                ? "Пустой single-проект. После добавления одного трека карточка будет открываться сразу в версии."
-                : "Пустой album-проект с обложкой. Треки добавишь уже внутри проекта."}
-            </CardDescription>
-          </CardHeader>
-          <div className="grid gap-2 md:grid-cols-3">
-            <Input
-              value={newProjectTitle}
-              onChange={(event) => setNewProjectTitle(event.target.value)}
-              placeholder={newProjectReleaseKind === "SINGLE" ? "Название single" : "Название альбома"}
-            />
-            <Button disabled={creatingProject || !newProjectTitle.trim()} onClick={createProject}>
-              {creatingProject ? "Создаем..." : "Создать"}
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setShowCreateProject(false);
-                setNewProjectTitle("");
-                setNewProjectReleaseKind("ALBUM");
-              }}
-            >
-              Отмена
-            </Button>
+      {(folderActionError || projectActionError || demoError) && (
+        <InlineActionMessage message={folderActionError || projectActionError || demoError} />
+      )}
+
+      {activeZone === "workspace" && songsDataLoading ? (
+        <Card className="rounded-2xl p-4">
+          <div className="animate-pulse space-y-3">
+            <div className="h-10 rounded-xl bg-white/70" />
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <div className="h-32 rounded-2xl bg-white/70" />
+              <div className="h-32 rounded-2xl bg-white/70" />
+              <div className="h-32 rounded-2xl bg-white/70" />
+              <div className="h-32 rounded-2xl bg-white/70" />
+            </div>
           </div>
         </Card>
-      )}
+      ) : null}
 
-      {(folderActionError || projectActionError || demoError) && (
-        <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-          {folderActionError || projectActionError || demoError}
+	      {activeZone === "workspace" ? (
+	        <div className="space-y-4">
+            <LearnContextCard
+              block={songsLearnBlock ?? null}
+              targetLabelOverride={learnAnchorTrack?.title ?? null}
+              onAction={handleSongsLearnAction}
+            />
+
+	          <Card className="relative overflow-hidden rounded-[22px] border border-brand-border bg-gradient-to-br from-[#f7fbf2] via-[#f1f6ea] to-[#e8f0df] p-0 shadow-[0_18px_46px_rgba(61,84,46,0.12)] md:rounded-3xl">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(217,249,157,0.28),transparent_36%),radial-gradient(circle_at_100%_100%,rgba(42,52,44,0.06),transparent_42%)]" />
+            <div className="relative border-b border-brand-border px-4 py-4 md:px-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="mb-2 inline-flex items-center gap-2 rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">
+                    <Sparkles className="h-3.5 w-3.5 text-brand-ink" />
+                    Активная мастерская
+                  </div>
+                  <h2 className="text-xl font-semibold tracking-tight text-brand-ink">Треки, которые реально двигаются</h2>
+                  <p className="mt-1 text-sm text-brand-muted">
+                    Статус работы, intent и один следующий шаг вместо абстрактного списка файлов.
+                  </p>
+                </div>
+                <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-3 py-1 text-xs text-brand-muted">
+                  В работе: <span className="ml-1 font-medium text-brand-ink">{workshopTracks.length}</span>
+                </span>
+              </div>
+            </div>
+            <div className="relative p-4 md:p-5">
+              {workshopTracks.length ? (
+                <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                  {workshopTracks.map((track) => (
+                    <Link key={track.id} href={`/songs/${track.id}`} className="group block">
+                      <div className="h-full rounded-[22px] border border-brand-border bg-white/88 p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-base font-semibold text-brand-ink">{track.title}</p>
+                            <p className="mt-1 text-xs text-brand-muted">
+                              {track.project?.title ?? "Без проекта"}
+                              {track.pathStage?.name ? ` • ${track.pathStage.name}` : ""}
+                            </p>
+                          </div>
+                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${getWorkbenchTone(track.workbenchState)}`}>
+                            {track.workbenchStateLabel}
+                          </span>
+                        </div>
+
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Badge className={getIdentityBridgeTone(track.identityBridge.status)}>
+                            {getIdentityBridgeLabel(track.identityBridge.status)}
+                          </Badge>
+                          <span className="rounded-full border border-brand-border bg-white px-2.5 py-1 text-[11px] text-brand-muted">
+                            {getTrackIdentityPreview(track)}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 space-y-3">
+                          <div className="rounded-2xl border border-brand-border bg-[#f7fbf2] px-3 py-2">
+                            <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Intent</p>
+                            <p className="mt-1 text-sm text-brand-ink">
+                              {track.trackIntent?.summary?.trim() || "Intent еще не описан. Открой трек и зафиксируй, зачем он нужен сейчас."}
+                            </p>
+                          </div>
+
+                          <div className="rounded-2xl border border-brand-border bg-white px-3 py-2">
+                            <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Следующий шаг</p>
+                            <p className="mt-1 text-sm font-medium text-brand-ink">
+                              {track.activeNextStep?.text ?? "Шаг не назначен"}
+                            </p>
+                            {track.activeNextStep?.reason ? (
+                              <p className="mt-1 text-sm text-brand-muted">{track.activeNextStep.reason}</p>
+                            ) : null}
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 text-xs text-brand-muted">
+                            <span className="rounded-full border border-brand-border bg-white px-2.5 py-1">
+                              Последняя версия: {track.latestDemo ? formatDate(track.latestDemo.createdAt) : "нет"}
+                            </span>
+                            <span className="rounded-full border border-brand-border bg-white px-2.5 py-1">
+                              Активность: {formatTrackActivity(track)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-brand-border bg-white/75 px-4 py-8 text-sm text-brand-muted">
+                  По текущим фильтрам нет активной мастерской. Создай трек или сними фильтры сверху.
+                </div>
+              )}
+            </div>
+          </Card>
+
+          <WorkspaceBrowser parentFolderId={null} externalQuery={query} showCreateActions={false} onChanged={refetchWorkspaceSurface} />
         </div>
-      )}
+      ) : null}
 
-      <WorkspaceBrowser parentFolderId={null} externalQuery={query} showCreateActions={false} onChanged={refetchWorkspaceSurface} />
-
-      <Card className="relative overflow-hidden rounded-3xl border border-brand-border bg-gradient-to-br from-[#fff6ef] via-[#fff3ef] to-[#f8ece8] p-0 shadow-[0_18px_46px_rgba(88,53,44,0.12)]">
+      {activeZone === "archive" ? (
+      <Card className="relative overflow-hidden rounded-[22px] border border-brand-border bg-gradient-to-br from-[#fff6ef] via-[#fff3ef] to-[#f8ece8] p-0 shadow-[0_18px_46px_rgba(88,53,44,0.12)] md:rounded-3xl">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(252,165,165,0.22),transparent_35%),radial-gradient(circle_at_100%_100%,rgba(127,29,29,0.06),transparent_42%)]" />
-        <div className="relative border-b border-brand-border px-4 py-4 md:px-5">
+        <div className="relative border-b border-brand-border px-3 py-3 md:px-5 md:py-4">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(255,255,255,0.45),transparent_38%)]" />
           <div className="relative flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="mb-2 inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white/90 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#8b2626]">
+              <div className="mb-1.5 inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white/90 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8b2626] md:mb-2 md:rounded-xl md:px-2.5 md:py-1 md:text-xs">
                 <Sparkles className="h-3.5 w-3.5" />
-                Archive
+                Архив
               </div>
-              <h2 className="text-xl font-semibold tracking-tight text-brand-ink">Release Archive</h2>
-              <p className="mt-1 text-sm text-brand-muted">
+              <h2 className="text-lg font-semibold tracking-tight text-brand-ink md:text-xl">Архив релизов</h2>
+              <p className="mt-1 text-xs text-brand-muted md:text-sm">
                 Архив релизов с финальной инфой (вручную или из нашей дистрибуции). Использует общий поиск сверху.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
+              <span className="inline-flex items-center rounded-lg border border-brand-border bg-white/85 px-2 py-0.5 text-[11px] text-brand-muted md:rounded-xl md:px-2.5 md:py-1 md:text-xs">
                 Треков: <span className="ml-1 font-medium text-brand-ink">{releaseArchiveTracks.length}</span>
               </span>
-              <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
+              <span className="inline-flex items-center rounded-lg border border-brand-border bg-white/85 px-2 py-0.5 text-[11px] text-brand-muted md:rounded-xl md:px-2.5 md:py-1 md:text-xs">
                 Поиск: <span className="ml-1 font-medium text-brand-ink">{query.trim() ? "активен" : "все"}</span>
               </span>
             </div>
           </div>
         </div>
 
-        <div className="relative p-4 md:p-5">
-          {releaseArchiveTracks.length ? (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="relative p-3 md:p-5">
+          {songsDataLoading ? (
+            <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3 xl:grid-cols-4">
+              {Array.from({ length: 8 }).map((_, index) => (
+                <div key={`archive-skeleton-${index}`} className="overflow-hidden rounded-2xl border border-brand-border bg-white/80 p-2">
+                  <div className="aspect-square animate-pulse rounded-xl bg-[#e6eedb]" />
+                  <div className="mt-2 h-4 animate-pulse rounded bg-[#e6eedb]" />
+                  <div className="mt-1 h-3 animate-pulse rounded bg-[#edf3e3]" />
+                </div>
+              ))}
+            </div>
+          ) : releaseArchiveTracks.length ? (
+            <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3 xl:grid-cols-4">
               {releaseArchiveTracks.map((track) => {
                 const meta = track.releaseArchiveMeta;
                 if (!meta) return null;
@@ -1455,20 +1872,45 @@ export default function SongsPage() {
                 const archiveMetaLine = archiveDateLabel
                   ? `${archiveDateLabel} • ${releaseKindLabelRu(releaseKind)}`
                   : `Дата не указана • ${releaseKindLabelRu(releaseKind)}`;
+                const archivePlaybackDemo = track.releaseDemo ?? track.distributionRequest?.masterDemo ?? null;
+                const canPlayReleaseDemo = Boolean(archivePlaybackDemo?.id);
+                const isActiveReleaseDemo = canPlayReleaseDemo ? playback.isActive(archivePlaybackDemo!.id) : false;
+                const isPlayingReleaseDemo = canPlayReleaseDemo ? playback.isPlayingDemo(archivePlaybackDemo!.id) : false;
 
                 return (
                   <Link key={track.id} href={`/songs/${track.id}`} className="group block">
                     <div className="overflow-hidden rounded-2xl border border-brand-border bg-white/90 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
                       <div className="relative aspect-square" style={coverStyle}>
-                        <div className="absolute inset-0 bg-gradient-to-b from-black/5 via-transparent to-black/20" />
-                        <div className="absolute left-3 top-3 rounded-lg bg-black/25 px-2 py-1 text-[11px] font-medium text-white backdrop-blur">
-                          {releaseKindLabelRu(releaseKind)}
+                        <div className="absolute inset-0 bg-gradient-to-b from-black/5 via-transparent to-black/20 transition group-hover:from-black/10 group-hover:to-black/35" />
+                        <div className="pointer-events-none absolute inset-0 opacity-0 transition duration-200 group-hover:opacity-100">
+                          {canPlayReleaseDemo && (
+                            <button
+                              type="button"
+                              className="pointer-events-auto absolute bottom-3 right-3 inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/35 bg-black/45 text-white shadow-lg backdrop-blur hover:bg-black/60"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                playReleaseArchiveTrack(track);
+                              }}
+                              aria-label={isPlayingReleaseDemo ? "Пауза релизной версии" : "Играть релизную версию"}
+                            >
+                              <PlaybackIcon type={isPlayingReleaseDemo && isActiveReleaseDemo ? "pause" : "play"} className="h-5 w-5" />
+                            </button>
+                          )}
                         </div>
                       </div>
                       <div className="bg-[#111214] px-3 py-3">
                         <p className="truncate text-[15px] font-semibold text-white">{archiveTitle}</p>
                         <p className="truncate text-sm text-white/75">{archiveArtist}</p>
                         <p className="truncate text-sm text-white/55">{archiveMetaLine}</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${getIdentityBridgeTone(track.identityBridge.status)}`}>
+                            {getIdentityBridgeLabel(track.identityBridge.status)}
+                          </span>
+                          <span className="inline-flex rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[11px] text-white/75">
+                            {getTrackIdentityPreview(track)}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </Link>
@@ -1482,6 +1924,7 @@ export default function SongsPage() {
           )}
         </div>
       </Card>
+      ) : null}
 
       {false && <Card className="overflow-hidden rounded-3xl border border-brand-border bg-gradient-to-br from-[#f4f8ee] via-[#eff4e8] to-[#e8efde] p-0 shadow-sm">
         <div className="border-b border-brand-border px-4 py-4 md:px-5">
@@ -1583,7 +2026,7 @@ export default function SongsPage() {
                         event.stopPropagation();
                         void playProjectFromCard(project.id);
                       }}
-                      aria-label="Play project"
+                      aria-label="Проиграть проект"
                     >
                       {projectCardPlayLoadingId === project.id ? "…" : <PlaybackIcon type="play" className="h-4 w-4" />}
                     </button>
@@ -1598,7 +2041,7 @@ export default function SongsPage() {
                         {project.artistLabel || project.folder?.title || "Без папки"} • {formatDate(project.updatedAt)}
                       </p>
                     </div>
-                    <div className="rounded-xl border border-brand-border bg-white px-2 py-1 text-sm text-brand-ink shadow-sm">Open</div>
+                    <div className="rounded-xl border border-brand-border bg-white px-2 py-1 text-sm text-brand-ink shadow-sm">Открыть</div>
                   </div>
                 </Link>
               </div>
@@ -1678,9 +2121,22 @@ export default function SongsPage() {
                 <div key={track.id} className="rounded-xl border border-brand-border bg-white/85 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <Link href={`/songs/${track.id}`} className="min-w-0 flex-1">
-                      <p className="truncate font-medium">{track.title}</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate font-medium text-brand-ink">{track.title}</p>
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${getWorkbenchTone(track.workbenchState)}`}>
+                          {track.workbenchStateLabel}
+                        </span>
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${getIdentityBridgeTone(track.identityBridge.status)}`}>
+                          {getIdentityBridgeLabel(track.identityBridge.status)}
+                        </span>
+                      </div>
                       <p className="text-xs text-brand-muted">
-                        {track.pathStage?.name ?? "Не выбран"} • Демо: {track._count?.demos ?? 0}
+                        {track.pathStage?.name ?? "Не выбран"} • Последняя версия: {track.latestDemo ? formatDate(track.latestDemo.createdAt) : "нет"}
+                      </p>
+                      {track.trackIntent?.summary ? <p className="mt-1 text-sm text-brand-muted">{track.trackIntent.summary}</p> : null}
+                      <p className="mt-1 text-sm text-brand-ink">{getTrackIdentityPreview(track)}</p>
+                      <p className="mt-1 text-sm text-brand-ink">
+                        {track.activeNextStep?.text ?? "Следующий шаг не назначен"}
                       </p>
                       <SongAnalysisBadges
                         bpm={track.displayBpm}
@@ -1689,7 +2145,7 @@ export default function SongsPage() {
                         className="mt-1"
                         compact
                       />
-                      <p className="text-xs text-brand-muted">Обновлено: {formatDate(track.updatedAt)}</p>
+                      <p className="text-xs text-brand-muted">Обновлено: {formatTrackActivity(track)}</p>
                     </Link>
                     <Button
                       variant="secondary"
@@ -1753,10 +2209,16 @@ export default function SongsPage() {
               {recentTracks.map((track) => (
                 <Link key={track.id} href={`/songs/${track.id}`}>
                   <div className="rounded-xl border border-brand-border bg-white px-3 py-2 transition hover:border-[#2A342C]">
-                    <p className="truncate text-sm font-medium text-brand-ink">{track.title}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-sm font-medium text-brand-ink">{track.title}</p>
+                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${getWorkbenchTone(track.workbenchState)}`}>
+                        {track.workbenchStateLabel}
+                      </span>
+                    </div>
                     <p className="text-xs text-brand-muted">
-                      {track.pathStage?.name ?? "Без статуса"} • {formatDate(track.updatedAt)}
+                      {track.pathStage?.name ?? "Без статуса"} • {formatTrackActivity(track)}
                     </p>
+                    {track.activeNextStep?.text ? <p className="mt-1 text-sm text-brand-ink">{track.activeNextStep.text}</p> : null}
                     <SongAnalysisBadges
                       bpm={track.displayBpm}
                       keyRoot={track.displayKeyRoot}
@@ -1773,16 +2235,260 @@ export default function SongsPage() {
         </div>
       </div>}
 
-      {showSongFlowModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-[#1a211b]/45 p-4 pt-20 backdrop-blur-sm"
-          onClick={closeSongFlowModal}
-        >
-          <Card
-            className="max-h-[calc(100vh-6rem)] w-full max-w-3xl overflow-y-auto rounded-2xl bg-[#f7fbf2]"
-            onClick={(event) => event.stopPropagation()}
+      {showMobileQuickAddMenu && !isCreationOverlayOpen && (
+        <OverlayPortal>
+          <div className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px] md:hidden" onClick={() => setShowMobileQuickAddMenu(false)}>
+            <div
+              className="absolute bottom-40 right-4 w-[calc(100vw-2rem)] max-w-[340px] rounded-3xl border border-brand-border bg-[#0f1814]/92 p-3 shadow-[0_20px_42px_rgba(15,22,18,0.48)]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="grid justify-items-center gap-2">
+                <Button
+                  className="h-12 w-[90%] rounded-2xl border border-[#3b4f45] bg-gradient-to-r from-[#1a2a22] to-[#223329] text-base text-white hover:brightness-110"
+                  onClick={() => {
+                    setShowMobileQuickAddMenu(false);
+                    openNewSongWizard();
+                  }}
+                >
+                  Новая песня
+                </Button>
+                <Button
+                  className="h-12 w-[90%] rounded-2xl border border-[#3b4f45] bg-gradient-to-r from-[#1a2a22] to-[#223329] text-base text-white hover:brightness-110"
+                  onClick={() => {
+                    setShowMobileQuickAddMenu(false);
+                    openNewSongRecorder();
+                  }}
+                >
+                  Новая демо-запись
+                </Button>
+                <Button
+                  className="h-12 w-[90%] rounded-2xl border border-[#3b4f45] bg-gradient-to-r from-[#1a2a22] to-[#223329] text-base text-white hover:brightness-110"
+                  onClick={() => {
+                    setShowMobileQuickAddMenu(false);
+                    openCreateProjectPanel("SINGLE");
+                  }}
+                >
+                  Новый сингл
+                </Button>
+                <Button
+                  className="h-12 w-[90%] rounded-2xl border border-[#3b4f45] bg-gradient-to-r from-[#1a2a22] to-[#223329] text-base text-white hover:brightness-110"
+                  onClick={() => {
+                    setShowMobileQuickAddMenu(false);
+                    openCreateProjectPanel("ALBUM");
+                  }}
+                >
+                  Новый альбом
+                </Button>
+              </div>
+            </div>
+          </div>
+        </OverlayPortal>
+      )}
+
+      {!isCreationOverlayOpen && (
+        <div className="fixed bottom-24 right-4 z-[60] md:hidden">
+          <Button
+            aria-label="Открыть быстрые действия"
+            aria-expanded={showMobileQuickAddMenu}
+            className="h-14 w-14 rounded-full p-0 shadow-[0_12px_28px_rgba(55,74,61,0.28)]"
+            onClick={() => setShowMobileQuickAddMenu((prev) => !prev)}
           >
-            <CardHeader>
+            <Plus
+              className={`h-7 w-7 transition-transform duration-200 ${showMobileQuickAddMenu ? "rotate-45" : ""}`}
+              strokeWidth={2.4}
+              aria-hidden="true"
+            />
+          </Button>
+        </div>
+      )}
+
+      <Modal
+        open={Boolean(deleteFolderPrompt)}
+        onClose={() => setDeleteFolderPrompt(null)}
+        title="Удалить папку?"
+        description={
+          deleteFolderPrompt
+            ? deleteFolderPrompt.hasContent
+              ? deleteFolderPrompt.hasProjects
+                ? `Папка «${deleteFolderPrompt.title}» будет удалена вместе с проектами, треками и версиями.`
+                : `Папка «${deleteFolderPrompt.title}» будет удалена вместе с треками.`
+              : `Папка «${deleteFolderPrompt.title}» пустая и будет удалена.`
+            : undefined
+        }
+        actions={[
+          {
+            label: "Отмена",
+            variant: "secondary",
+            onClick: () => setDeleteFolderPrompt(null),
+            disabled: Boolean(deletingFolderId)
+          },
+          {
+            label: deletingFolderId ? "Удаляем..." : "Удалить",
+            onClick: () => void submitDeleteFolder(),
+            disabled: Boolean(deletingFolderId)
+          }
+        ]}
+      />
+
+      <Modal
+        open={Boolean(assignProjectFolderPrompt)}
+        onClose={() => setAssignProjectFolderPrompt(null)}
+        title="Папка проекта"
+        description={assignProjectFolderPrompt ? `Выбери или введи название папки для проекта «${assignProjectFolderPrompt.title}».` : undefined}
+        actions={[
+          {
+            label: "Отмена",
+            variant: "secondary",
+            onClick: () => setAssignProjectFolderPrompt(null),
+            disabled: Boolean(projectActionLoadingId)
+          },
+          {
+            label: projectActionLoadingId === assignProjectFolderPrompt?.id ? "Сохраняем..." : "Сохранить",
+            onClick: () => void submitAssignProjectToFolder(),
+            disabled: Boolean(projectActionLoadingId)
+          }
+        ]}
+      >
+        <Input
+          value={assignProjectFolderPrompt?.value ?? ""}
+          onChange={(event) =>
+            setAssignProjectFolderPrompt((prev) => (prev ? { ...prev, value: event.target.value } : prev))
+          }
+          placeholder="Оставь пустым, чтобы снять папку"
+          className="bg-white"
+        />
+        <p className="mt-2 text-xs text-brand-muted">Существующие: {(folders ?? []).map((folder) => folder.title).join(", ") || "папок пока нет"}</p>
+      </Modal>
+
+      <Modal
+        open={Boolean(renameProjectPrompt)}
+        onClose={() => setRenameProjectPrompt(null)}
+        title="Переименовать проект"
+        actions={[
+          {
+            label: "Отмена",
+            variant: "secondary",
+            onClick: () => setRenameProjectPrompt(null),
+            disabled: Boolean(projectActionLoadingId)
+          },
+          {
+            label: projectActionLoadingId === renameProjectPrompt?.id ? "Сохраняем..." : "Сохранить",
+            onClick: () => void submitProjectRename(),
+            disabled: Boolean(projectActionLoadingId) || !renameProjectPrompt?.value.trim()
+          }
+        ]}
+      >
+        <Input
+          value={renameProjectPrompt?.value ?? ""}
+          onChange={(event) =>
+            setRenameProjectPrompt((prev) => (prev ? { ...prev, value: event.target.value } : prev))
+          }
+          placeholder="Новое название проекта"
+          className="bg-white"
+        />
+      </Modal>
+
+      <Modal
+        open={Boolean(deleteProjectPrompt)}
+        onClose={() => setDeleteProjectPrompt(null)}
+        title="Удалить проект?"
+        description={
+          deleteProjectPrompt
+            ? deleteProjectPrompt.hasTracks
+              ? `Проект «${deleteProjectPrompt.title}» будет удалён вместе со всеми песнями и версиями.`
+              : `Пустой проект «${deleteProjectPrompt.title}» будет удалён.`
+            : undefined
+        }
+        actions={[
+          {
+            label: "Отмена",
+            variant: "secondary",
+            onClick: () => setDeleteProjectPrompt(null),
+            disabled: Boolean(projectActionLoadingId)
+          },
+          {
+            label: projectActionLoadingId === deleteProjectPrompt?.id ? "Удаляем..." : "Удалить",
+            onClick: () => void submitDeleteProject(),
+            disabled: Boolean(projectActionLoadingId)
+          }
+        ]}
+      />
+
+      {showCreateProject && (
+        <OverlayPortal>
+          <div
+            className="fixed inset-0 z-50 flex items-start justify-center bg-[#1a211b]/45 p-4 pt-20 backdrop-blur-sm"
+            onClick={closeCreateProjectPanel}
+          >
+            <Card
+              className="relative max-h-[calc(100vh-6rem)] w-full max-w-xl overflow-y-auto rounded-2xl bg-[#f7fbf2]"
+              onClick={(event) => event.stopPropagation()}
+            >
+            <Button
+              type="button"
+              variant="ghost"
+              className="absolute right-4 top-4 h-9 w-9 rounded-full border border-brand-border bg-white/90 p-0 text-brand-ink hover:bg-white"
+              onClick={closeCreateProjectPanel}
+              aria-label="Закрыть"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+            <CardHeader className="pr-12">
+              <CardTitle>Создать {newProjectReleaseKind === "SINGLE" ? "сингл" : "альбом"}</CardTitle>
+              <CardDescription>
+                {newProjectReleaseKind === "SINGLE"
+                  ? "Пустой проект-сингл. После добавления трека карточка откроет его версию сразу."
+                  : "Пустой проект-альбом с обложкой. Треки добавишь уже внутри проекта."}
+              </CardDescription>
+            </CardHeader>
+            <div className="space-y-3">
+              {projectActionError && <InlineActionMessage message={projectActionError} />}
+              <Input
+                value={newProjectTitle}
+                onChange={(event) => setNewProjectTitle(event.target.value)}
+                placeholder={newProjectReleaseKind === "SINGLE" ? "Название сингла" : "Название альбома"}
+                className="border-brand-border bg-white/90"
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={creatingProject || !newProjectTitle.trim()} onClick={createProject}>
+                  {creatingProject ? "Создаем..." : "Создать"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="border-brand-border bg-white text-brand-ink hover:bg-white"
+                  onClick={closeCreateProjectPanel}
+                >
+                  Закрыть
+                </Button>
+              </div>
+            </div>
+            </Card>
+          </div>
+        </OverlayPortal>
+      )}
+
+      {showSongFlowModal && (
+        <OverlayPortal>
+          <div
+            className="fixed inset-0 z-50 overflow-y-auto bg-[#1a211b]/45 backdrop-blur-sm"
+            onClick={closeSongFlowModal}
+          >
+            <div className="flex min-h-screen min-h-[100dvh] items-start justify-center px-3 pb-5 pt-4 md:items-center md:p-6">
+              <Card
+                className="relative max-h-[calc(100vh-2rem)] max-h-[calc(100dvh-2rem)] w-full max-w-3xl overflow-y-auto rounded-2xl bg-[#f7fbf2] md:max-h-[calc(100vh-3rem)] md:max-h-[calc(100dvh-3rem)]"
+                onClick={(event) => event.stopPropagation()}
+              >
+            <Button
+              type="button"
+              variant="ghost"
+              className="absolute right-4 top-4 h-9 w-9 rounded-full border border-brand-border bg-white/90 p-0 text-brand-ink hover:bg-white"
+              onClick={closeSongFlowModal}
+              aria-label="Закрыть"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+            <CardHeader className="pr-12">
               <CardTitle>Новая песня</CardTitle>
               <CardDescription>
                 {songFlowStep === "lyrics" && "Шаг 1 из 4: название и текст песни."}
@@ -1837,14 +2543,6 @@ export default function SongsPage() {
                     >
                       Сохранить только текст
                     </Button>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="border-brand-border bg-white text-brand-ink hover:bg-white"
-                      onClick={closeSongFlowModal}
-                    >
-                      Закрыть
-                    </Button>
                   </div>
                 </div>
               )}
@@ -1862,7 +2560,7 @@ export default function SongsPage() {
                     <option value="NONE">Выберите этап</option>
                     {songFlowStageOptions.map((stage) => (
                       <option key={stage.id} value={String(stage.id)}>
-                        {stage.name}
+                        {formatStageOptionLabel(stage)}
                       </option>
                     ))}
                   </Select>
@@ -1871,7 +2569,7 @@ export default function SongsPage() {
                     <Button type="button" onClick={handleSongFlowStageContinue}>
                       {(() => {
                         const selected = songFlowStageOptions.find((stage) => stage.id === songFlowDraft.selectedStageId);
-                        return selected && isDemoSongStage(selected.name) ? "Открыть demo flow" : "Далее";
+                        return selected && isDemoSongStage(selected.name) ? "Открыть демо-поток" : "Далее";
                       })()}
                     </Button>
                     <Button
@@ -1978,45 +2676,51 @@ export default function SongsPage() {
                 />
               )}
             </div>
-          </Card>
-        </div>
+              </Card>
+            </div>
+          </div>
+        </OverlayPortal>
       )}
 
       {showDemoComposer && (
-        <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-[#1a211b]/45 p-4 pt-20 backdrop-blur-sm"
-          onClick={() => {
-            resetDemoComposer();
-            setShowDemoComposer(false);
-          }}
-        >
-          <Card
-            className="max-h-[calc(100vh-6rem)] w-full max-w-4xl overflow-y-auto rounded-2xl bg-[#f7fbf2]"
-            onClick={(event) => event.stopPropagation()}
+        <OverlayPortal>
+          <div
+            className="fixed inset-0 z-50 overflow-y-auto bg-[#1a211b]/45 backdrop-blur-sm"
+            onClick={() => {
+              resetDemoComposer();
+              setShowDemoComposer(false);
+            }}
           >
-            <CardHeader>
+            <div className="flex min-h-screen min-h-[100dvh] items-start justify-center px-3 pb-5 pt-4 md:items-center md:p-6">
+              <Card
+                className="relative max-h-[calc(100vh-2rem)] max-h-[calc(100dvh-2rem)] w-full max-w-4xl overflow-y-auto rounded-2xl bg-[#f7fbf2] md:max-h-[calc(100vh-3rem)] md:max-h-[calc(100dvh-3rem)]"
+                onClick={(event) => event.stopPropagation()}
+              >
+            <Button
+              type="button"
+              variant="ghost"
+              className="absolute right-4 top-4 h-9 w-9 rounded-full border border-brand-border bg-white/90 p-0 text-brand-ink hover:bg-white"
+              onClick={() => {
+                resetDemoComposer();
+                setShowDemoComposer(false);
+              }}
+              aria-label="Закрыть"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+            <CardHeader className="pr-12">
               <CardTitle>Новая песня</CardTitle>
               <CardDescription>Сразу запись, затем текст и версия.</CardDescription>
             </CardHeader>
             <div className="space-y-3">
-              <div className="grid gap-3 md:grid-cols-2">
-                <Input
-                  value={demoNewTrackTitle}
-                  onChange={(event) => setDemoNewTrackTitle(event.target.value)}
-                  placeholder="Название трека"
-                />
-                <Select value={demoStageId} onChange={(event) => setDemoStageId(event.target.value)}>
-                  <option value="NONE">Статус не выбран</option>
-                  {visibleStages.map((stage) => (
-                    <option key={stage.id} value={String(stage.id)}>
-                      {stage.name}
-                    </option>
-                  ))}
-                </Select>
-              </div>
+              <Input
+                value={demoNewTrackTitle}
+                onChange={(event) => setDemoNewTrackTitle(event.target.value)}
+                placeholder="Название трека"
+              />
 
               <Select value={demoVersionType} onChange={(event) => setDemoVersionType(event.target.value as DemoVersionType)}>
-                <option value="IDEA_TEXT">Идея (текст)</option>
+                <option value="IDEA_TEXT">Идея</option>
                 <option value="DEMO">Демо</option>
                 <option value="ARRANGEMENT">Продакшн</option>
                 <option value="NO_MIX">Запись без сведения</option>
@@ -2048,13 +2752,14 @@ export default function SongsPage() {
                 ref={fileInputRef}
                 type="file"
                 accept="audio/*"
-                className="hidden"
-                onChange={async (event) => {
-                  const file = event.target.files?.[0] ?? null;
-                  setDemoFile(file);
-                  setDemoFileAnalysis(file ? await detectAudioAnalysisMvp(file) : null);
-                }}
-              />
+                  className="hidden"
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    setDemoFile(file);
+                    setDemoError("");
+                    setDemoFileAnalysis(file ? await detectAudioAnalysisMvp(file) : null);
+                  }}
+                />
               {demoMode === "upload" && demoFile && (
                 <div className="rounded-xl border border-brand-border bg-white/75 px-3 py-2 text-xs text-brand-muted">
                   <p>Файл: {demoFile.name}</p>
@@ -2075,9 +2780,11 @@ export default function SongsPage() {
                   onReset={() => {
                     setRecordedMix(null);
                     setRecordedMixAnalysis(null);
+                    setDemoError("");
                   }}
                   onReady={(payload) => {
                     setRecordedMix(payload);
+                    setDemoError("");
                     void detectAudioAnalysisMvp(payload.blob).then(setRecordedMixAnalysis).catch(() => setRecordedMixAnalysis(null));
                   }}
                 />
@@ -2136,23 +2843,57 @@ export default function SongsPage() {
                 </div>
               )}
 
-              <div className="flex flex-wrap gap-2">
-                <Button disabled={savingDemo} onClick={saveDemo}>
-                  {savingDemo ? "Сохраняем..." : "Добавить демо"}
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    resetDemoComposer();
-                    setShowDemoComposer(false);
-                  }}
-                >
-                  Закрыть
-                </Button>
-              </div>
+              {demoSourceReady ? (
+                <div className="rounded-xl border border-brand-border bg-white/70 p-3">
+                  <SongProjectPickerStep
+                    projects={projects ?? []}
+                    selectionMode={demoProjectSelectionMode}
+                    selectedProjectId={demoSelectedProjectId}
+                    newProjectTitle={demoNewProjectTitle}
+                    newProjectReleaseKind={demoNewProjectReleaseKind}
+                    onSelectionModeChange={(mode) => {
+                      setDemoProjectSelectionMode(mode);
+                      setDemoError("");
+                    }}
+                    onSelectedProjectIdChange={(projectId) => {
+                      setDemoSelectedProjectId(projectId);
+                      setDemoError("");
+                    }}
+                    onNewProjectTitleChange={(title) => {
+                      setDemoNewProjectTitle(title);
+                      setDemoError("");
+                    }}
+                    onNewProjectReleaseKindChange={(kind) => {
+                      setDemoNewProjectReleaseKind(kind);
+                      setDemoError("");
+                    }}
+                    onConfirm={() => void saveDemo()}
+                    confirmLabel={
+                      demoVersionType === "IDEA_TEXT"
+                        ? "Сохранить песню"
+                        : "Сохранить демо"
+                    }
+                    busy={savingDemo}
+                    error={demoError}
+                    allowNewProjectKindChoice
+                    singleTrackTitle={demoNewTrackTitle}
+                    modeLabel={
+                      demoVersionType === "IDEA_TEXT"
+                        ? "Выберите проект, куда сохранить песню с текстом."
+                        : "Демо готово. Выберите проект, куда сохранить версию."
+                    }
+                  />
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-brand-border bg-white/70 px-3 py-2 text-sm text-brand-muted">
+                  Подготовьте демо (файл или запись), затем выберите проект для сохранения.
+                </div>
+              )}
             </div>
-          </Card>
-        </div>
+              </Card>
+            </div>
+          </div>
+        </OverlayPortal>
       )}
     </div>
   );

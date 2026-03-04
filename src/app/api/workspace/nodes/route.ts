@@ -6,6 +6,9 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
 import { buildFolderBreadcrumbs, folderDepthForNode, listUserFoldersTree } from "@/lib/workspace-tree";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 type SortableNode = {
   pinnedAt: Date | null;
   sortIndex: number;

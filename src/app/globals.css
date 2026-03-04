@@ -4,11 +4,25 @@
 
 :root {
   color-scheme: light;
+  --font-space-grotesk:
+    "Avenir Next",
+    Avenir,
+    "Trebuchet MS",
+    "Segoe UI",
+    sans-serif;
+  --font-plex-mono:
+    "SFMono-Regular",
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
 }
 
 body {
   @apply min-h-screen bg-brand-surface text-brand-ink antialiased;
   background-color: #f7f9e3;
+  font-family: var(--font-space-grotesk);
 }
 
 ::selection {

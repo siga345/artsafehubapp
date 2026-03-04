@@ -14,6 +14,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { InlineActionMessage } from "@/components/ui/inline-action-message";
+import { Modal } from "@/components/ui/modal";
+import { useToast } from "@/components/ui/toast";
 import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
 import {
   appendAudioAnalysisToFormData,
@@ -106,20 +109,20 @@ type CoverPreset = {
 };
 
 const COVER_PRESETS: CoverPreset[] = [
-  { key: "untitled-pink", label: "Pink Fade", colorA: "#F6B4E6", colorB: "#E46AE8" },
-  { key: "citrus-neon", label: "Citrus", colorA: "#FFE66D", colorB: "#FF7A18" },
-  { key: "lime-grove", label: "Lime", colorA: "#D9F99D", colorB: "#65A30D" },
-  { key: "sky-blue", label: "Sky", colorA: "#A8D8FF", colorB: "#5B7CFA" },
-  { key: "ash-graphite", label: "Graphite", colorA: "#C9CED6", colorB: "#4A5563" },
-  { key: "rose-night", label: "Rose Night", colorA: "#FF9AC3", colorB: "#7A2A5F" },
-  { key: "sand-olive", label: "Sand", colorA: "#E9DFC8", colorB: "#88906A" },
-  { key: "lava-red", label: "Lava", colorA: "#FF6B57", colorB: "#7F1D1D" },
-  { key: "violet-ink", label: "Violet", colorA: "#BFA7FF", colorB: "#3D2C8D" },
-  { key: "teal-glow", label: "Teal", colorA: "#78F2E8", colorB: "#0B7285" },
-  { key: "mono-cream", label: "Cream", colorA: "#F5F1E8", colorB: "#D8D3C8" },
-  { key: "lime-punch", label: "Lime", colorA: "#C8FF7A", colorB: "#2F9E44" },
-  { key: "album-aurora", label: "Album Aurora", colorA: "#86EFAC", colorB: "#1D4ED8", releaseKind: "ALBUM" },
-  { key: "album-sunset-grid", label: "Album Sunset", colorA: "#FDBA74", colorB: "#7C3AED", releaseKind: "ALBUM" }
+  { key: "untitled-pink", label: "Розовый градиент", colorA: "#F6B4E6", colorB: "#E46AE8" },
+  { key: "citrus-neon", label: "Цитрус", colorA: "#FFE66D", colorB: "#FF7A18" },
+  { key: "lime-grove", label: "Лайм", colorA: "#D9F99D", colorB: "#65A30D" },
+  { key: "sky-blue", label: "Небо", colorA: "#A8D8FF", colorB: "#5B7CFA" },
+  { key: "ash-graphite", label: "Графит", colorA: "#C9CED6", colorB: "#4A5563" },
+  { key: "rose-night", label: "Ночная роза", colorA: "#FF9AC3", colorB: "#7A2A5F" },
+  { key: "sand-olive", label: "Песок", colorA: "#E9DFC8", colorB: "#88906A" },
+  { key: "lava-red", label: "Лава", colorA: "#FF6B57", colorB: "#7F1D1D" },
+  { key: "violet-ink", label: "Фиолет", colorA: "#BFA7FF", colorB: "#3D2C8D" },
+  { key: "teal-glow", label: "Тил", colorA: "#78F2E8", colorB: "#0B7285" },
+  { key: "mono-cream", label: "Крем", colorA: "#F5F1E8", colorB: "#D8D3C8" },
+  { key: "lime-punch", label: "Лайм-неон", colorA: "#C8FF7A", colorB: "#2F9E44" },
+  { key: "album-aurora", label: "Альбом: Аврора", colorA: "#86EFAC", colorB: "#1D4ED8", releaseKind: "ALBUM" },
+  { key: "album-sunset-grid", label: "Альбом: Закат", colorA: "#FDBA74", colorB: "#7C3AED", releaseKind: "ALBUM" }
 ];
 
 function formatClock(seconds: number) {
@@ -162,6 +165,10 @@ function coverStyle(project: ProjectDetail): React.CSSProperties {
   });
 }
 
+function formatStageOptionLabel(stage: PathStage) {
+  return resolveVersionTypeByStage(stage) === "NO_MIX" ? "Запись без сведения" : stage.name;
+}
+
 async function fetcher<T>(url: string): Promise<T> {
   return apiFetchJson<T>(url);
 }
@@ -187,6 +194,7 @@ async function getAudioDurationSeconds(file: File): Promise<number> {
 
 export default function SongProjectPage({ params }: { params: { id: string } }) {
   const router = useRouter();
+  const toast = useToast();
   const { data: project, refetch } = useQuery({
     queryKey: ["song-project", params.id],
     queryFn: () => fetcher<ProjectDetail>(`/api/projects/${params.id}`)
@@ -236,12 +244,16 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
   const [newTrackRecordedMix, setNewTrackRecordedMix] = useState<{ blob: Blob; durationSec: number; filename: string } | null>(null);
   const [newTrackRecordedMixAnalysis, setNewTrackRecordedMixAnalysis] = useState<UploadAudioAnalysisMeta | null>(null);
   const [recorderResetKey, setRecorderResetKey] = useState(0);
+  const [renameProjectPrompt, setRenameProjectPrompt] = useState<{ value: string; initialTitle: string } | null>(null);
+  const [deleteProjectPrompt, setDeleteProjectPrompt] = useState<{ title: string; hasTracks: boolean } | null>(null);
+  const [deleteTrackPrompt, setDeleteTrackPrompt] = useState<{ id: string; title: string } | null>(null);
+  const [moveTrackPrompt, setMoveTrackPrompt] = useState<{ id: string; title: string; currentIndex: number; value: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const projectSongFlowFileInputRef = useRef<HTMLInputElement | null>(null);
   const playback = useSongsPlayback();
 
-  const tracks = project?.tracks ?? [];
+  const tracks = useMemo(() => project?.tracks ?? [], [project?.tracks]);
   const visibleStages = useMemo(() => stages.filter((stage) => !stage.name.toLowerCase().includes("промо")), [stages]);
   const projectSongFlowStageOptions = useMemo(
     () => visibleStages.filter((stage) => isSelectableSongCreationStage(stage)),
@@ -263,7 +275,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
           demoId: preferredDemo.id,
           src: `/api/audio-clips/${preferredDemo.id}/stream`,
           title: track.title,
-          subtitle: `${project.title} • ${track.pathStage?.name ?? "Без статуса"}`,
+          subtitle: `${project.title} • ${track.pathStage ? formatStageOptionLabel(track.pathStage) : "Без статуса"}`,
           linkHref: `/songs/${track.id}`,
           durationSec: preferredDemo.duration,
           trackId: track.id,
@@ -308,7 +320,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        closeAddTrackModal();
+        setShowAddTrackModal(false);
       }
     }
 
@@ -334,7 +346,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        closeProjectSongFlowModal();
+        setShowProjectSongFlowModal(false);
       }
     }
 
@@ -367,7 +379,6 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
   const totalTracks = project._count?.tracks ?? tracks.length;
   const playlistDuration = formatPlaylistDuration(tracks);
   const projectPlayAccentStyle = playbackAccentButtonStyle({ colorA: project.coverColorA, colorB: project.coverColorB });
-  const playableTracksCount = projectQueue.length;
   const lastUpdatedLabel = formatTrackWhen(project.updatedAt);
   const isSingleProject = project.releaseKind === "SINGLE";
   const singleTrack = tracks.length === 1 ? tracks[0] : null;
@@ -419,7 +430,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
     const currentProject = project;
     if (!currentProject) return;
     if (currentProject.releaseKind === "SINGLE" && (currentProject._count?.tracks ?? currentProject.tracks.length) >= 1) {
-      setProjectActionError("Single project can contain only one track. Switch to Album to add more.");
+      setProjectActionError("Сингл может содержать только один трек. Переключите проект в формат альбома, чтобы добавить больше.");
       return;
     }
     setShowAddTrackQuickActions(false);
@@ -815,6 +826,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
 
       await refetch();
       closeAddTrackModal();
+      toast.success("Трек добавлен в проект.");
     } catch (error) {
       setCreateTrackError(error instanceof Error ? error.message : "Не удалось создать трек.");
     } finally {
@@ -828,13 +840,24 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
       setProjectActionError("Проект не загружен.");
       return;
     }
+    setRenameProjectPrompt({
+      value: currentProject.title,
+      initialTitle: currentProject.title
+    });
+    setShowProjectMenu(false);
+  }
 
-    const nextTitle = window.prompt("Новое название проекта", currentProject.title)?.trim();
-    if (!nextTitle || nextTitle === currentProject.title) return;
+  async function submitProjectRename() {
+    const currentProject = project;
+    if (!currentProject || !renameProjectPrompt) return;
+    const nextTitle = renameProjectPrompt.value.trim();
+    if (!nextTitle || nextTitle === renameProjectPrompt.initialTitle) {
+      setRenameProjectPrompt(null);
+      return;
+    }
 
     setSavingProjectMeta(true);
     setProjectActionError("");
-    setShowProjectMenu(false);
     try {
       const response = await apiFetch(`/api/projects/${currentProject.id}`, {
         method: "PATCH",
@@ -846,6 +869,8 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
         throw new Error(payload?.error || "Не удалось переименовать проект.");
       }
       await refetch();
+      setRenameProjectPrompt(null);
+      toast.success("Название проекта обновлено.");
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось переименовать проект.");
     } finally {
@@ -883,6 +908,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
       }
       await refetch();
       setShowCoverPicker(false);
+      toast.success("Обложка обновлена.");
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось обновить обложку.");
     } finally {
@@ -898,16 +924,19 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
     }
 
     const hasTracks = (currentProject._count?.tracks ?? currentProject.tracks.length) > 0;
-    const confirmed = window.confirm(
+    setDeleteProjectPrompt({
+      title: currentProject.title,
       hasTracks
-        ? "Удалить проект вместе со всеми песнями и версиями?"
-        : "Удалить пустой проект?"
-    );
-    if (!confirmed) return;
+    });
+    setShowProjectMenu(false);
+  }
 
+  async function submitDeleteProject() {
+    const currentProject = project;
+    if (!currentProject || !deleteProjectPrompt) return;
+    const hasTracks = deleteProjectPrompt.hasTracks;
     setSavingProjectMeta(true);
     setProjectActionError("");
-    setShowProjectMenu(false);
     try {
       const response = await apiFetch(`/api/projects/${currentProject.id}${hasTracks ? "?force=1" : ""}`, {
         method: "DELETE"
@@ -916,9 +945,11 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error || "Не удалось удалить проект.");
       }
+      toast.success("Проект удалён.");
       router.push("/songs");
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось удалить проект.");
+    } finally {
       setSavingProjectMeta(false);
     }
   }
@@ -940,6 +971,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
         throw new Error(payload?.error || "Не удалось изменить тип проекта.");
       }
       await refetch();
+      toast.success(nextKind === "SINGLE" ? "Проект переведён в режим сингла." : "Проект переведён в режим альбома.");
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось изменить тип проекта.");
     } finally {
@@ -948,19 +980,23 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
   }
 
   async function deleteTrackFromProject(track: ProjectTrack) {
-    const confirmed = window.confirm(`Удалить трек «${track.title}» вместе со всеми версиями?`);
-    if (!confirmed) return;
-
-    setTrackMenuBusyId(track.id);
-    setProjectActionError("");
+    setDeleteTrackPrompt({ id: track.id, title: track.title });
     setMenuTrackId("");
+  }
+
+  async function submitDeleteTrack() {
+    if (!deleteTrackPrompt) return;
+    setTrackMenuBusyId(deleteTrackPrompt.id);
+    setProjectActionError("");
     try {
-      const response = await apiFetch(`/api/songs/${track.id}`, { method: "DELETE" });
+      const response = await apiFetch(`/api/songs/${deleteTrackPrompt.id}`, { method: "DELETE" });
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error || "Не удалось удалить трек.");
       }
       await refetch();
+      setDeleteTrackPrompt(null);
+      toast.success("Трек удалён.");
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось удалить трек.");
     } finally {
@@ -983,28 +1019,35 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
       return;
     }
 
-    const rawPosition = window
-      .prompt(`Позиция для «${track.title}» (1-${tracks.length})`, String(currentIndex + 1))
-      ?.trim();
-    if (!rawPosition) return;
+    setMoveTrackPrompt({
+      id: track.id,
+      title: track.title,
+      currentIndex,
+      value: String(currentIndex + 1)
+    });
+    setMenuTrackId("");
+  }
 
-    const nextIndex = Number.parseInt(rawPosition, 10) - 1;
+  async function submitMoveTrackInPlaylist() {
+    const currentProject = project;
+    if (!currentProject || !moveTrackPrompt) return;
+
+    const nextIndex = Number.parseInt(moveTrackPrompt.value.trim(), 10) - 1;
     if (!Number.isInteger(nextIndex) || nextIndex < 0 || nextIndex >= tracks.length) {
       setProjectActionError(`Введите номер позиции от 1 до ${tracks.length}.`);
       return;
     }
-    if (nextIndex === currentIndex) {
-      setMenuTrackId("");
+    if (nextIndex === moveTrackPrompt.currentIndex) {
+      setMoveTrackPrompt(null);
       return;
     }
 
     const orderedTrackIds = tracks.map((item) => item.id);
-    orderedTrackIds.splice(currentIndex, 1);
-    orderedTrackIds.splice(nextIndex, 0, track.id);
+    orderedTrackIds.splice(moveTrackPrompt.currentIndex, 1);
+    orderedTrackIds.splice(nextIndex, 0, moveTrackPrompt.id);
 
-    setTrackMenuBusyId(track.id);
+    setTrackMenuBusyId(moveTrackPrompt.id);
     setProjectActionError("");
-    setMenuTrackId("");
     try {
       const response = await apiFetch(`/api/projects/${currentProject.id}/tracks/reorder`, {
         method: "POST",
@@ -1016,6 +1059,8 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
         throw new Error(payload?.error || "Не удалось переместить трек.");
       }
       await refetch();
+      setMoveTrackPrompt(null);
+      toast.success("Порядок треков обновлён.");
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Не удалось переместить трек.");
     } finally {
@@ -1024,9 +1069,9 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
   }
 
   return (
-    <div className="pb-36">
-      <div className="mx-auto w-full max-w-5xl px-4 py-5 md:px-6">
-        <div className="relative min-h-[calc(100vh-9rem)] overflow-visible rounded-[30px] border border-brand-border bg-gradient-to-br from-[#edf4e4] via-[#e8f0de] to-[#e2ead7] px-4 py-5 text-brand-ink shadow-[0_20px_45px_rgba(61,84,46,0.14)] md:px-5">
+    <div className="pb-28 md:pb-36">
+      <div className="mx-auto w-full max-w-5xl px-3 py-3 md:px-6 md:py-5">
+        <div className="relative overflow-visible rounded-[26px] border border-brand-border bg-gradient-to-br from-[#edf4e4] via-[#e8f0de] to-[#e2ead7] px-2.5 py-3 text-brand-ink shadow-[0_20px_45px_rgba(61,84,46,0.14)] md:min-h-[calc(100vh-9rem)] md:rounded-[30px] md:px-5 md:py-5">
           <div className="pointer-events-none absolute inset-0 opacity-90">
             <div className="absolute -right-12 top-8 h-44 w-44 rounded-full bg-[#e8f27a]/45 blur-3xl" />
             <div className="absolute left-[-2rem] top-24 h-40 w-40 rounded-full bg-white/35 blur-2xl" />
@@ -1034,12 +1079,12 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
             <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.35)_0%,rgba(255,255,255,0)_34%,rgba(90,123,75,0.07)_100%)]" />
           </div>
 
-          <div className="relative mb-5 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+          <div className="relative mb-4 flex items-center justify-between gap-2 md:mb-5 md:gap-3">
+            <div className="flex items-center gap-1.5 md:gap-2">
               <Link href="/songs">
                 <Button
                   variant="secondary"
-                  className="h-10 rounded-xl border-brand-border bg-white/90 px-3 text-brand-ink shadow-sm hover:bg-white"
+                  className="h-9 rounded-lg border-brand-border bg-white/90 px-2.5 text-sm text-brand-ink shadow-sm hover:bg-white md:h-10 md:rounded-xl md:px-3"
                 >
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Назад
@@ -1047,14 +1092,14 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
               </Link>
               <Badge className="hidden items-center gap-1.5 border-[#cbdab8] bg-white/75 text-[#4b6440] sm:inline-flex">
                 <Sparkles className="h-3.5 w-3.5" />
-                {isSingleProject ? "Single Page" : "Project Page"}
+                {isSingleProject ? "Страница сингла" : "Страница проекта"}
               </Badge>
             </div>
 
             <div className="relative flex items-center gap-2">
               <Button
                 variant="secondary"
-                className="h-10 w-10 rounded-xl border-brand-border bg-white/90 p-0 text-brand-ink shadow-sm hover:bg-white"
+                className="h-9 w-9 rounded-lg border-brand-border bg-white/90 p-0 text-brand-ink shadow-sm hover:bg-white md:h-10 md:w-10 md:rounded-xl"
                 onClick={(event) => {
                   event.stopPropagation();
                   setShowProjectMenu((prev) => !prev);
@@ -1076,7 +1121,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                     onClick={renameProject}
                   >
                     <Pencil className="h-4 w-4 text-brand-muted" />
-                    <span>Rename project</span>
+                    <span>Переименовать проект</span>
                   </button>
                   <button
                     type="button"
@@ -1084,50 +1129,49 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                     onClick={openCoverPicker}
                   >
                     <Wand2 className="h-4 w-4 text-brand-muted" />
-                    <span>Change cover art</span>
+                    <span>Изменить обложку</span>
                   </button>
                   <div className="my-1 h-px bg-black/5" />
-                  <button
-                    type="button"
-                    className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
-                    onClick={() => void setProjectReleaseKind("SINGLE")}
-                  >
-                    Mark as Single
-                  </button>
-                  <button
-                    type="button"
-                    className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
-                    onClick={() => void setProjectReleaseKind("ALBUM")}
-                  >
-                    Mark as Album
-                  </button>
+                  {isSingleProject ? (
+                    <button
+                      type="button"
+                      className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                      onClick={() => void setProjectReleaseKind("ALBUM")}
+                    >
+                      Сделать альбомом
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="block w-full rounded-xl px-3 py-2 text-left text-sm text-brand-ink hover:bg-black/5"
+                      onClick={() => void setProjectReleaseKind("SINGLE")}
+                    >
+                      Сделать синглом
+                    </button>
+                  )}
                   <div className="my-1 h-px bg-black/5" />
                   <button
                     type="button"
                     className="block w-full rounded-xl px-3 py-2 text-left text-sm text-red-700 hover:bg-[#ffe7e1]"
                     onClick={deleteProject}
                   >
-                    Delete project
+                    Удалить проект
                   </button>
                 </div>
               )}
             </div>
           </div>
 
-          {projectActionError && (
-            <div className="relative mb-4 rounded-2xl border border-red-300/70 bg-[#fff2ef]/90 px-3 py-2 text-sm text-[#a4372a] shadow-sm">
-              {projectActionError}
-            </div>
-          )}
+          {projectActionError && <InlineActionMessage className="relative mb-4" message={projectActionError} />}
 
-          <section className="relative isolate mb-6 overflow-hidden rounded-[28px] border border-brand-border bg-white p-4 shadow-[0_14px_32px_rgba(61,84,46,0.1)] md:p-5">
+          <section className="relative isolate mb-3 overflow-hidden rounded-[22px] border border-brand-border bg-white p-2 shadow-[0_14px_32px_rgba(61,84,46,0.1)] md:mb-6 md:rounded-[28px] md:p-5">
             <div className="pointer-events-none absolute inset-0 z-0">
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(213,234,164,0.24),transparent_42%),radial-gradient(circle_at_92%_8%,rgba(217,249,157,0.16),transparent_36%)]" />
               <div className="absolute right-6 top-4 h-24 w-24 rounded-full bg-[#d9f99d]/30 blur-2xl" />
             </div>
 
-            <div className="relative z-10 grid gap-5 md:grid-cols-[minmax(0,340px)_1fr]">
-              <div className="relative aspect-square overflow-visible rounded-3xl">
+            <div className="relative z-10 grid gap-1.5 md:grid-cols-[minmax(0,340px)_1fr] md:gap-5">
+              <div className="relative aspect-square w-full overflow-visible rounded-3xl">
                 <div className="group relative h-full w-full overflow-hidden rounded-3xl border border-black/10 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.2),0_18px_34px_rgba(61,84,46,0.16)]">
                   <div className="absolute inset-0" style={coverStyle(project)} />
                   <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(255,255,255,0.18),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.12),transparent_45%,rgba(0,0,0,0.14))]" />
@@ -1136,25 +1180,25 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                     type="button"
                     className="absolute inset-0 appearance-none rounded-3xl bg-transparent p-0"
                     onClick={openCoverPicker}
-                    aria-label="Change project cover"
+                    aria-label="Изменить обложку проекта"
                   />
                 </div>
 
               </div>
 
-              <div className="space-y-4">
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge className="border-[#cbdab8] bg-[#f5faeb] text-[#4b6440]">
+              <div className="space-y-2.5 md:space-y-4">
+                <div className="space-y-1.5 md:space-y-3">
+                  <div className="flex flex-wrap items-center gap-1.5 md:gap-2">
+                    <Badge className="border-[#cbdab8] bg-[#f5faeb] text-[11px] text-[#4b6440] md:text-xs">
                       <Sparkles className="mr-1 h-3.5 w-3.5" />
-                      {isSingleProject ? "Single" : "Album"}
+                      {isSingleProject ? "Сингл" : "Альбом"}
                     </Badge>
-                    <Badge className="border-brand-border bg-white text-brand-muted">
+                    <Badge className="border-brand-border bg-white text-[11px] text-brand-muted md:text-xs">
                       <Clock3 className="mr-1 h-3.5 w-3.5" />
                       Обновлено: {lastUpdatedLabel}
                     </Badge>
                     {project.folder?.title && (
-                      <Badge className="border-brand-border bg-white text-brand-muted">
+                      <Badge className="border-brand-border bg-white text-[11px] text-brand-muted md:text-xs">
                         <FolderOpen className="mr-1 h-3.5 w-3.5" />
                         {project.folder.title}
                       </Badge>
@@ -1162,47 +1206,42 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                   </div>
 
                   <div>
-                    <h1 className="text-3xl font-semibold tracking-tight text-brand-ink md:text-4xl">{project.title}</h1>
-                    <p className="mt-1 text-sm text-brand-muted">
-                      {project.artistLabel || "ART SAFE"} • {totalTracks} track{totalTracks === 1 ? "" : "s"} • {playlistDuration}
+                    <h1 className="text-2xl font-semibold tracking-tight text-brand-ink md:text-4xl">{project.title}</h1>
+                    <p className="mt-1 text-xs text-brand-muted md:text-sm">
+                      {project.artistLabel || "ART SAFE"} • {totalTracks} {totalTracks === 1 ? "трек" : "трека"} • {playlistDuration}
                     </p>
                     {isSingleProject && (
-                      <p className="mt-1 text-xs text-brand-muted">
-                        Single-mode: карточка откроет версии напрямую после появления одного трека.
+                      <p className="mt-1 text-[11px] text-brand-muted md:text-xs">
+                        Режим сингла: карточка откроет версии напрямую после появления одного трека.
                       </p>
                     )}
                   </div>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="rounded-2xl border border-brand-border bg-white px-3 py-3 shadow-sm">
-                    <p className="text-[11px] uppercase tracking-[0.14em] text-brand-muted">Tracks</p>
-                    <p className="mt-1 text-2xl font-semibold tracking-tight text-brand-ink">{totalTracks}</p>
-                    <p className="text-xs text-brand-muted">в проекте</p>
+                <div className="grid grid-cols-2 gap-1.5 md:gap-3">
+                  <div className="rounded-xl border border-brand-border bg-white px-2 py-1.5 shadow-sm md:rounded-2xl md:px-3 md:py-3">
+                    <p className="text-[10px] uppercase tracking-[0.14em] text-brand-muted md:text-[11px]">Треки</p>
+                    <p className="mt-1 text-xl font-semibold tracking-tight text-brand-ink md:text-2xl">{totalTracks}</p>
+                    <p className="text-[11px] text-brand-muted md:text-xs">в проекте</p>
                   </div>
-                  <div className="rounded-2xl border border-brand-border bg-white px-3 py-3 shadow-sm">
-                    <p className="text-[11px] uppercase tracking-[0.14em] text-brand-muted">Playable</p>
-                    <p className="mt-1 text-2xl font-semibold tracking-tight text-brand-ink">{playableTracksCount}</p>
-                    <p className="text-xs text-brand-muted">с аудио-версией</p>
-                  </div>
-                  <div className="rounded-2xl border border-brand-border bg-white px-3 py-3 shadow-sm">
-                    <p className="text-[11px] uppercase tracking-[0.14em] text-brand-muted">Duration</p>
-                    <p className="mt-1 text-2xl font-semibold tracking-tight text-brand-ink">{playlistDuration}</p>
-                    <p className="text-xs text-brand-muted">общая длина</p>
+                  <div className="rounded-xl border border-brand-border bg-white px-2 py-1.5 shadow-sm md:rounded-2xl md:px-3 md:py-3">
+                    <p className="text-[10px] uppercase tracking-[0.14em] text-brand-muted md:text-[11px]">Длительность</p>
+                    <p className="mt-1 text-xl font-semibold tracking-tight text-brand-ink md:text-2xl">{playlistDuration}</p>
+                    <p className="text-[11px] text-brand-muted md:text-xs">общая длина</p>
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-brand-border bg-white p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]">
-                  <div className="flex flex-wrap gap-2">
+                <div className="rounded-xl border border-brand-border bg-white p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] md:rounded-2xl md:p-3">
+                  <div className="flex flex-wrap gap-1.5 md:gap-2">
                     <Button
-                      className="rounded-xl border hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="h-9 rounded-lg border px-3 text-xs hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60 md:h-10 md:rounded-xl md:text-sm"
                       style={projectPlayAccentStyle}
                       onClick={() => playProjectQueue(undefined, false)}
                       disabled={!projectQueue.length}
                     >
                       <span className="inline-flex items-center gap-2">
-                        <PlayCircle className="h-4 w-4" />
-                        <span>{isSingleProject ? "Play single" : "Play project"}</span>
+                        <PlayCircle className="h-3.5 w-3.5 md:h-4 md:w-4" />
+                        <span>{isSingleProject ? "Слушать сингл" : "Слушать проект"}</span>
                       </span>
                     </Button>
                     {isSingleProject && singleTrack && (
@@ -1215,49 +1254,49 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                       >
                         <Button
                           variant="secondary"
-                          className="rounded-xl border-brand-border bg-white text-brand-ink hover:bg-white"
+                          className="h-9 rounded-lg border-brand-border bg-white px-3 text-xs text-brand-ink hover:bg-white md:h-10 md:rounded-xl md:text-sm"
                         >
-                          <ArrowUpRight className="mr-2 h-4 w-4" />
-                          Open Versions
+                          <ArrowUpRight className="mr-2 h-3.5 w-3.5 md:h-4 md:w-4" />
+                          Открыть версии
                         </Button>
                       </Link>
                     )}
                     <Button
                       variant="secondary"
-                      className="rounded-xl border-brand-border bg-white text-brand-ink hover:bg-white"
+                      className="h-9 rounded-lg border-brand-border bg-white px-3 text-xs text-brand-ink hover:bg-white md:h-10 md:rounded-xl md:text-sm"
                       onClick={openProjectSongFlowWizard}
                       disabled={!canAddTrackToProject}
                     >
-                      <PlusCircle className="mr-2 h-4 w-4" />
-                      {isSingleProject ? "Add first track" : "Add tracks"}
+                      <PlusCircle className="mr-2 h-3.5 w-3.5 md:h-4 md:w-4" />
+                      {isSingleProject ? "Добавить первый трек" : "Добавить треки"}
                     </Button>
                   </div>
-                  <p className="mt-2 text-xs text-brand-muted">
+                  <p className="mt-1.5 text-[11px] text-brand-muted md:mt-2 md:text-xs">
                     {isSingleProject
                       ? canAddTrackToProject
-                        ? "Добавь один трек в single, после чего карточка будет открывать страницу версий."
-                        : "Single уже содержит трек. Для второго трека переключи тип проекта на Album."
-                      : "Быстрые действия по проекту и добавлению новых треков в PATH-флоу."}
+                        ? "Добавь один трек в сингл, после чего карточка будет открывать страницу версий."
+                        : "Сингл уже содержит трек. Для второго трека переключи тип проекта на альбом."
+                      : "Быстрые действия по проекту и добавлению новых треков в PATH-поток."}
                   </p>
                 </div>
               </div>
             </div>
           </section>
 
-          <section className="relative overflow-hidden rounded-[28px] border border-brand-border bg-white/85 p-3 shadow-[0_14px_32px_rgba(61,84,46,0.08)] md:p-4">
+          <section className="relative overflow-hidden rounded-[22px] border border-brand-border bg-white/85 p-2 shadow-[0_14px_32px_rgba(61,84,46,0.08)] md:rounded-[28px] md:p-4">
             <div className="pointer-events-none absolute inset-0">
               <div className="absolute left-4 top-4 h-16 w-32 rounded-full bg-[#dff0c6]/50 blur-2xl" />
               <div className="absolute inset-x-0 top-0 h-14 bg-[linear-gradient(90deg,rgba(255,255,255,0.45),rgba(255,255,255,0))]" />
             </div>
 
-            <div className="relative mb-3 rounded-2xl border border-brand-border bg-white/75 px-3 py-3 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="relative mb-2 rounded-xl border border-brand-border bg-white/75 px-2 py-2 shadow-sm md:mb-3 md:rounded-2xl md:px-3 md:py-3">
+              <div className="flex flex-wrap items-start justify-between gap-2 md:gap-3">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">{isSingleProject ? "Single Track" : "Playlist"}</p>
-                  <h2 className="text-lg font-semibold tracking-tight text-brand-ink">
+                  <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">{isSingleProject ? "Трек сингла" : "Плейлист"}</p>
+                  <h2 className="text-base font-semibold tracking-tight text-brand-ink md:text-lg">
                     {isSingleProject ? "Трек сингла" : "Треки проекта"}
                   </h2>
-                  <p className="text-sm text-brand-muted">
+                  <p className="text-xs text-brand-muted md:text-sm">
                     {isSingleProject
                       ? "Открой версии единственного трека и работай с single-обложкой."
                       : "Открывай версии, управляй порядком и слушай проект как плейлист."}
@@ -1266,17 +1305,13 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                 <div className="flex flex-wrap gap-2">
                   <Badge className="border-brand-border bg-white/90 text-brand-muted">
                     <Music2 className="mr-1 h-3.5 w-3.5" />
-                    {totalTracks} tracks
-                  </Badge>
-                  <Badge className="border-brand-border bg-white/90 text-brand-muted">
-                    <PlayCircle className="mr-1 h-3.5 w-3.5" />
-                    {playableTracksCount} playable
+                    {totalTracks} трек.
                   </Badge>
                 </div>
               </div>
             </div>
 
-            <div className="relative space-y-2">
+            <div className="relative space-y-1.5 md:space-y-2">
               {tracks.map((track, index) => {
               const playbackPayload = trackPlaybackItem(track);
               const playbackDemo = playbackPayload?.demo ?? null;
@@ -1287,16 +1322,16 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
               return (
                 <div
                   key={track.id}
-                  className={`group relative flex items-center gap-3 rounded-2xl border px-3 py-3 shadow-sm transition ${
+                  className={`group relative flex items-center gap-2 rounded-xl border px-2.5 py-2 shadow-sm transition md:gap-3 md:rounded-2xl md:px-3 md:py-3 ${
                     isCurrent
                       ? "border-[#9fc7b3] bg-[#e7f2eb] shadow-[0_10px_24px_rgba(77,126,101,0.14)]"
                       : "border-brand-border bg-white/80 hover:border-[#c5d8b3] hover:bg-white"
                   }`}
                   onClick={() => playbackDemo && handleTrackRowTap(track)}
                 >
-                  <div className="absolute inset-y-2 left-1 w-1 rounded-full bg-transparent transition group-hover:bg-[#dcebc5]" />
+                  <div className="absolute inset-y-1.5 left-0.5 w-0.5 rounded-full bg-transparent transition group-hover:bg-[#dcebc5] md:inset-y-2 md:left-1 md:w-1" />
                   <div
-                    className={`w-9 shrink-0 text-center text-sm font-medium ${
+                    className={`w-8 shrink-0 text-center text-xs font-medium md:w-9 md:text-sm ${
                       isCurrent ? "text-[#2e6855]" : "text-brand-muted"
                     }`}
                   >
@@ -1305,7 +1340,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
 
                   <button
                     type="button"
-                    className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border text-sm shadow-sm ${
+                    className={`grid h-9 w-9 shrink-0 place-items-center rounded-full border text-sm shadow-sm md:h-10 md:w-10 ${
                       playbackDemo
                         ? "hover:brightness-95"
                         : "cursor-not-allowed border-brand-border bg-white/70 text-brand-muted/60"
@@ -1316,31 +1351,31 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                       if (playbackDemo) handleTrackPlayButton(track);
                     }}
                     disabled={!playbackDemo}
-                    aria-label={playbackDemo ? "Play track" : "No playable version"}
+                    aria-label={playbackDemo ? "Воспроизвести трек" : "Нет воспроизводимой версии"}
                   >
                     {playbackDemo ? (
                       <PlaybackIcon
                         type={playback.isPlayingDemo(playbackDemo.id) ? "pause" : "play"}
-                        className="h-4 w-4"
+                        className="h-3.5 w-3.5 md:h-4 md:w-4"
                       />
                     ) : null}
                   </button>
 
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="truncate text-base font-semibold text-brand-ink">{track.title}</p>
+                    <div className="flex flex-wrap items-center gap-1.5 md:gap-2">
+                      <p className="truncate text-sm font-semibold text-brand-ink md:text-base">{track.title}</p>
                       {isPrimaryPlayback && (
-                        <span className="shrink-0 rounded-full border border-[#a4cbb8] bg-[#e8f3ec] px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-[#2e6855]">
+                        <span className="shrink-0 rounded-full border border-[#a4cbb8] bg-[#e8f3ec] px-1.5 py-0.5 text-[9px] uppercase tracking-[0.08em] text-[#2e6855] md:px-2 md:text-[10px]">
                           primary
                         </span>
                       )}
                       {track.pathStage?.name && (
-                        <Badge className="h-5 border-brand-border bg-white/90 px-2 py-0 text-[10px] uppercase tracking-[0.08em] text-brand-muted">
-                          {track.pathStage.name}
+                        <Badge className="h-[18px] border-brand-border bg-white/90 px-1.5 py-0 text-[9px] uppercase tracking-[0.08em] text-brand-muted md:h-5 md:px-2 md:text-[10px]">
+                          {formatStageOptionLabel(track.pathStage)}
                         </Badge>
                       )}
                     </div>
-                    <p className="truncate text-sm text-brand-muted">
+                    <p className="truncate text-xs text-brand-muted md:text-sm">
                       {playbackDemo
                         ? `${formatTrackWhen(playbackDemo.createdAt)} • ${formatClock(playbackDemo.duration)}`
                         : "Нет аудио-версий (пока только текст/черновик)"}
@@ -1363,7 +1398,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                     <div className="relative">
                       <button
                         type="button"
-                        className="grid h-9 w-9 place-items-center rounded-xl border border-brand-border bg-white text-brand-ink shadow-sm hover:bg-white disabled:cursor-wait disabled:opacity-60"
+                        className="grid h-8 w-8 place-items-center rounded-lg border border-brand-border bg-white text-brand-ink shadow-sm hover:bg-white disabled:cursor-wait disabled:opacity-60 md:h-9 md:w-9 md:rounded-xl"
                         onClick={(event) => {
                           event.stopPropagation();
                           setMenuTrackId((prev) => (prev === track.id ? "" : track.id));
@@ -1400,7 +1435,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                               className="block rounded-xl px-3 py-2 text-sm text-brand-ink hover:bg-black/5"
                               onClick={() => setMenuTrackId("")}
                             >
-                              Export audio
+                              Экспорт аудио
                             </a>
                           ) : (
                             <button
@@ -1408,7 +1443,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                               disabled
                               className="block w-full cursor-not-allowed rounded-xl px-3 py-2 text-left text-sm text-brand-muted/60"
                             >
-                              Export audio
+                              Экспорт аудио
                             </button>
                           )}
                           <button
@@ -1417,7 +1452,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                             onClick={() => void moveTrackInPlaylist(track, index)}
                             disabled={isSingleProject}
                           >
-                            Move
+                            Переместить
                           </button>
                           <div className="my-1 h-px bg-black/5" />
                           <button
@@ -1425,7 +1460,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                             className="block w-full rounded-xl px-3 py-2 text-left text-sm text-red-700 hover:bg-[#ffe7e1]"
                             onClick={() => void deleteTrackFromProject(track)}
                           >
-                            Delete track
+                            Удалить трек
                           </button>
                         </div>
                       )}
@@ -1443,8 +1478,8 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                 <p className="text-sm font-medium text-brand-ink">В проекте пока нет треков</p>
                 <p className="mt-1 text-xs text-brand-muted">
                   {isSingleProject
-                    ? "Добавь первый трек, чтобы single начал открываться сразу в версии."
-                    : "Добавь первый трек через PATH flow или быстрый импорт."}
+                    ? "Добавь первый трек, чтобы сингл начал открываться сразу в версии."
+                    : "Добавь первый трек через PATH-поток или быстрый импорт."}
                 </p>
               </div>
             )}
@@ -1464,7 +1499,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
           >
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Cover</p>
+                <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Обложка</p>
                 <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">Обложка проекта</h2>
                 <p className="text-sm text-brand-muted">Быстрый выбор обложки из пресетов проекта.</p>
               </div>
@@ -1548,7 +1583,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
             className="w-full max-w-md rounded-[24px] border border-brand-border bg-[#f7fbf2] p-5 text-brand-ink shadow-[0_24px_60px_rgba(61,84,46,0.22)]"
             onClick={(event) => event.stopPropagation()}
           >
-            <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Single</p>
+            <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Сингл</p>
             <h2 className="mt-1 text-2xl font-semibold tracking-tight">У сингла пока нет трека</h2>
             <p className="mt-2 text-sm text-brand-muted">
               Добавьте песню, чтобы single открывался сразу в версии трека.
@@ -1563,7 +1598,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                 Позже
               </Button>
               <Button type="button" onClick={handleEmptySingleTrackPromptAdd}>
-                Add
+                Добавить
               </Button>
             </div>
           </div>
@@ -1581,7 +1616,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
           >
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Add Track</p>
+                <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Добавить трек</p>
                 <h2 className="text-2xl font-semibold tracking-tight">Новый трек в проект</h2>
                 <p className="text-sm text-brand-muted">
                   {projectSongFlowStep === "lyrics" && "Шаг 1 из 3: название и текст песни."}
@@ -1671,7 +1706,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                     <option value="NONE">Выберите этап</option>
                     {projectSongFlowStageOptions.map((stage) => (
                       <option key={stage.id} value={String(stage.id)}>
-                        {stage.name}
+                        {formatStageOptionLabel(stage)}
                       </option>
                     ))}
                   </Select>
@@ -1679,7 +1714,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                     <Button type="button" onClick={continueProjectSongFlowFromStage} disabled={projectSongFlowSaving}>
                       {(() => {
                         const selected = projectSongFlowStageOptions.find((stage) => stage.id === projectSongFlowDraft.selectedStageId);
-                        return selected && isDemoSongStage(selected.name) ? "Открыть demo flow" : "Далее";
+                        return selected && isDemoSongStage(selected.name) ? "Открыть демо-поток" : "Далее";
                       })()}
                     </Button>
                     <Button
@@ -1764,6 +1799,110 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
         </div>
       )}
 
+      <Modal
+        open={Boolean(renameProjectPrompt)}
+        onClose={() => setRenameProjectPrompt(null)}
+        title="Переименовать проект"
+        actions={[
+          {
+            label: "Отмена",
+            variant: "secondary",
+            onClick: () => setRenameProjectPrompt(null),
+            disabled: savingProjectMeta
+          },
+          {
+            label: savingProjectMeta ? "Сохраняем..." : "Сохранить",
+            onClick: () => void submitProjectRename(),
+            disabled: savingProjectMeta || !renameProjectPrompt?.value.trim()
+          }
+        ]}
+      >
+        <Input
+          value={renameProjectPrompt?.value ?? ""}
+          onChange={(event) =>
+            setRenameProjectPrompt((prev) => (prev ? { ...prev, value: event.target.value } : prev))
+          }
+          placeholder="Новое название проекта"
+          className="bg-white"
+        />
+      </Modal>
+
+      <Modal
+        open={Boolean(deleteProjectPrompt)}
+        onClose={() => setDeleteProjectPrompt(null)}
+        title="Удалить проект?"
+        description={
+          deleteProjectPrompt
+            ? deleteProjectPrompt.hasTracks
+              ? `Проект «${deleteProjectPrompt.title}» будет удалён вместе с песнями и версиями.`
+              : `Пустой проект «${deleteProjectPrompt.title}» будет удалён.`
+            : undefined
+        }
+        actions={[
+          {
+            label: "Отмена",
+            variant: "secondary",
+            onClick: () => setDeleteProjectPrompt(null),
+            disabled: savingProjectMeta
+          },
+          {
+            label: savingProjectMeta ? "Удаляем..." : "Удалить",
+            onClick: () => void submitDeleteProject(),
+            disabled: savingProjectMeta
+          }
+        ]}
+      />
+
+      <Modal
+        open={Boolean(deleteTrackPrompt)}
+        onClose={() => setDeleteTrackPrompt(null)}
+        title="Удалить трек?"
+        description={deleteTrackPrompt ? `Трек «${deleteTrackPrompt.title}» будет удалён вместе со всеми версиями.` : undefined}
+        actions={[
+          {
+            label: "Отмена",
+            variant: "secondary",
+            onClick: () => setDeleteTrackPrompt(null),
+            disabled: Boolean(trackMenuBusyId)
+          },
+          {
+            label: trackMenuBusyId ? "Удаляем..." : "Удалить",
+            onClick: () => void submitDeleteTrack(),
+            disabled: Boolean(trackMenuBusyId)
+          }
+        ]}
+      />
+
+      <Modal
+        open={Boolean(moveTrackPrompt)}
+        onClose={() => setMoveTrackPrompt(null)}
+        title="Переместить трек в плейлисте"
+        description={moveTrackPrompt ? `Укажи новую позицию для «${moveTrackPrompt.title}» (1-${tracks.length}).` : undefined}
+        actions={[
+          {
+            label: "Отмена",
+            variant: "secondary",
+            onClick: () => setMoveTrackPrompt(null),
+            disabled: Boolean(trackMenuBusyId)
+          },
+          {
+            label: trackMenuBusyId ? "Перемещаем..." : "Сохранить",
+            onClick: () => void submitMoveTrackInPlaylist(),
+            disabled: Boolean(trackMenuBusyId)
+          }
+        ]}
+      >
+        <Input
+          value={moveTrackPrompt?.value ?? ""}
+          onChange={(event) =>
+            setMoveTrackPrompt((prev) => (prev ? { ...prev, value: event.target.value } : prev))
+          }
+          inputMode="numeric"
+          placeholder="Позиция"
+          className="bg-white"
+        />
+      </Modal>
+
       {showAddTrackModal && (
         <div
           className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 p-4 pt-16 backdrop-blur-sm"
@@ -1775,7 +1914,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
           >
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Add Track</p>
+                <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Добавление трека</p>
                 <h2 className="text-2xl font-semibold tracking-tight">Новый трек в проект</h2>
                 <p className="text-sm text-brand-muted">Запиши или загрузи первую версию сразу в этот проект.</p>
               </div>
@@ -1788,11 +1927,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
               </Button>
             </div>
 
-            {createTrackError && (
-              <div className="mb-4 rounded-xl border border-red-300/70 bg-[#fff2ef] px-3 py-2 text-sm text-[#a4372a]">
-                {createTrackError}
-              </div>
-            )}
+            {createTrackError && <InlineActionMessage className="mb-4" message={createTrackError} />}
 
             <div className="space-y-4">
               <Input
@@ -1813,7 +1948,7 @@ export default function SongProjectPage({ params }: { params: { id: string } }) 
                 <option value="MIXED">С сведением</option>
                 <option value="MASTERED">С мастерингом</option>
                 <option value="RELEASE">Релиз</option>
-                <option value="IDEA_TEXT">Идея (текст)</option>
+                <option value="IDEA_TEXT">Идея</option>
               </Select>
 
               {newTrackVersionType !== "IDEA_TEXT" && (

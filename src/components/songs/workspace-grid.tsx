@@ -150,7 +150,7 @@ export function WorkspaceGrid({
 
   return (
     <>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-2 gap-1.5 sm:gap-3 lg:grid-cols-3 xl:grid-cols-4">
         {nodes.map((node) =>
           renderNode({
             node,

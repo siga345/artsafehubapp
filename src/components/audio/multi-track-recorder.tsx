@@ -1,49 +1,44 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Trash2, Volume2, VolumeX } from "lucide-react";
 
 import { AudioWaveformPlayer } from "@/components/audio/audio-waveform-player";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  computeDelayTimeMsFromBpm,
   createDefaultFxChainSettings,
   hasEnabledFx,
   processAudioBufferWithFx,
-  type DelaySyncMode,
-  type DelayNoteDivision,
-  type FxChainSettings,
-  type FxFilterMode
+  type FxChainSettings
 } from "@/lib/audio/fx-chain";
-import {
-  clampLoopPercentRange,
-  hasActiveRecorderAdjust,
-  renderAdjustedBufferMvp,
-  type RecorderAdjustSettings
-} from "@/lib/audio/recorder-adjust";
 import { analyzeAudioBlobInBrowser } from "@/lib/audio/analysis";
 
-type RecordingState = "idle" | "recording" | "paused" | "stopped";
-type RecorderPanel = "adjust" | "fx" | "stems" | "mix";
-type AdjustMode = "varispeed" | "gain";
-type FxPreviewStatus = "idle" | "processing" | "ready" | "error";
-type FxBlockUiKey = "eq" | "autotune" | "distortion" | "filter" | "delay" | "reverb";
-type TopPopover = "key" | "bpm" | null;
+export type RecorderTrackRole = "beat" | "guitar" | "lead_vocal" | "double" | "back_vocal" | "piano" | "custom";
+export type RecorderTrackTemplate = {
+  name?: string;
+  role?: RecorderTrackRole | null;
+};
+
+type RecordingState = "idle" | "recording" | "paused";
+type RecorderTab = "tracks" | "fx" | "mix";
 type TonalMode = "minor" | "major";
+type AsyncStatus = "idle" | "processing" | "ready" | "error";
+type AutoDetectTarget = "bpm" | "key" | "both" | null;
+type FxPanelId = "eq" | "reverb" | "delay" | "filter" | "driveTune";
 
 type Layer = {
   id: string;
   kind: "import" | "recording";
   name: string;
+  role: RecorderTrackRole | null;
   blob: Blob;
   url: string;
   durationSec: number;
   muted: boolean;
   volume: number;
+  pan: number;
 };
-
-type PendingRecordedTake = Omit<Layer, "kind" | "muted" | "volume">;
 
 type ReadyPayload = {
   blob: Blob;
@@ -56,40 +51,88 @@ type MultiTrackRecorderProps = {
   onError: (message: string) => void;
   onReset?: () => void;
   resetKey?: number;
+  armedTrackTemplate?: RecorderTrackTemplate | null;
+  onSessionSnapshotChange?: (snapshot: MultiTrackRecorderSessionSnapshot) => void;
+};
+
+export type MultiTrackRecorderSessionSnapshot = {
+  bpm: number;
+  bpmAutoEnabled: boolean;
+  songKeyRoot: string | null;
+  songKeyMode: TonalMode;
+  songKeyAutoEnabled: boolean;
+  selectedLayerId: string | null;
+  layers: Array<{
+    id: string;
+    kind: Layer["kind"];
+    role: RecorderTrackRole | null;
+    name: string;
+    muted: boolean;
+    volume: number;
+    pan: number;
+    durationSec: number;
+  }>;
+  hasStemsPreview: boolean;
+  hasMixPreview: boolean;
 };
 
 export type MultiTrackRecorderHandle = {
-  importAudioLayerFromFile: (file: File, options?: { name?: string; volume?: number }) => Promise<void>;
+  importAudioLayerFromFile: (
+    file: File,
+    options?: { name?: string; volume?: number; pan?: number; role?: RecorderTrackRole | null; autoDetectTempoKey?: boolean }
+  ) => Promise<void>;
 };
 
-const WAVEFORM_SAMPLES = 140;
-const FX_PREVIEW_DEBOUNCE_MS = 320;
-const DELAY_DIVISION_OPTIONS: Array<{ value: DelayNoteDivision; label: string }> = [
-  { value: "1/4", label: "1/4" },
-  { value: "1/8", label: "1/8" },
-  { value: "1/8D", label: "1/8D" },
-  { value: "1/8T", label: "1/8T" },
-  { value: "1/16", label: "1/16" }
-];
-const ENHARMONIC_KEY_COLUMNS = [
-  { sharp: "C#", flat: "Db" },
-  { sharp: "D#", flat: "Eb" },
-  { sharp: "F#", flat: "Gb" },
-  { sharp: "G#", flat: "Ab" },
-  { sharp: "A#", flat: "Bb" }
-] as const;
-const NATURAL_KEYS = ["C", "D", "E", "F", "G", "A", "B"] as const;
+const KEY_ROOTS = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"] as const;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function clampBpmValue(value: number) {
+  return clamp(Math.round(value), 40, 240);
+}
+
+function clampPanValue(value: number) {
+  return clamp(Math.round(value), -100, 100);
+}
+
+function formatPanLabel(value: number) {
+  const pan = clampPanValue(value);
+  if (pan === 0) return "C";
+  return `${pan < 0 ? "L" : "R"}${Math.abs(pan)}`;
+}
 
 function formatDuration(seconds: number) {
-  const mm = Math.floor(seconds / 60);
-  const ss = Math.floor(seconds % 60);
+  const safe = Math.max(0, Math.round(seconds));
+  const mm = Math.floor(safe / 60);
+  const ss = safe % 60;
   return `${mm}:${String(ss).padStart(2, "0")}`;
 }
 
-function formatKeyChipLabel(root: string | null, mode: TonalMode, auto: boolean) {
-  if (auto) return root ? `${root} ${mode === "minor" ? "Min" : "Maj"}` : "Auto";
-  if (!root) return "Set Key";
-  return `${root} ${mode === "minor" ? "Min" : "Maj"}`;
+function createLayerName(index: number) {
+  return `Дорожка ${index}`;
+}
+
+function formatRoleLabel(role: RecorderTrackRole | null) {
+  switch (role) {
+    case "beat":
+      return "Beat";
+    case "guitar":
+      return "Guitar";
+    case "lead_vocal":
+      return "Lead";
+    case "double":
+      return "Double";
+    case "back_vocal":
+      return "Back";
+    case "piano":
+      return "Piano";
+    case "custom":
+      return "Custom";
+    default:
+      return null;
+  }
 }
 
 async function getBlobDurationSeconds(file: Blob): Promise<number> {
@@ -115,7 +158,7 @@ function encodeWavFromBuffer(buffer: AudioBuffer): Blob {
   const sampleRate = buffer.sampleRate;
   const sampleCount = buffer.length;
   const bytesPerSample = 2;
-  const dataLength = sampleCount * bytesPerSample;
+  const dataLength = sampleCount * channelCount * bytesPerSample;
   const out = new ArrayBuffer(44 + dataLength);
   const view = new DataView(out);
 
@@ -136,13 +179,13 @@ function encodeWavFromBuffer(buffer: AudioBuffer): Blob {
   offset += 4;
   view.setUint16(offset, 1, true);
   offset += 2;
-  view.setUint16(offset, 1, true);
+  view.setUint16(offset, channelCount, true);
   offset += 2;
   view.setUint32(offset, sampleRate, true);
   offset += 4;
-  view.setUint32(offset, sampleRate * bytesPerSample, true);
+  view.setUint32(offset, sampleRate * channelCount * bytesPerSample, true);
   offset += 4;
-  view.setUint16(offset, bytesPerSample, true);
+  view.setUint16(offset, channelCount * bytesPerSample, true);
   offset += 2;
   view.setUint16(offset, 8 * bytesPerSample, true);
   offset += 2;
@@ -150,535 +193,660 @@ function encodeWavFromBuffer(buffer: AudioBuffer): Blob {
   view.setUint32(offset, dataLength, true);
   offset += 4;
 
-  const mono = new Float32Array(sampleCount);
-  for (let ch = 0; ch < channelCount; ch += 1) {
-    const data = buffer.getChannelData(ch);
-    for (let i = 0; i < sampleCount; i += 1) {
-      mono[i] += data[i] / channelCount;
-    }
-  }
-
+  const channels = Array.from({ length: channelCount }, (_, ch) => buffer.getChannelData(ch));
   for (let i = 0; i < sampleCount; i += 1) {
-    const sample = Math.max(-1, Math.min(1, mono[i]));
-    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-    offset += 2;
+    for (let ch = 0; ch < channelCount; ch += 1) {
+      const sample = Math.max(-1, Math.min(1, channels[ch]?.[i] ?? 0));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += 2;
+    }
   }
 
   return new Blob([view], { type: "audio/wav" });
 }
 
-function createLayerName(index: number) {
-  return `Дорожка ${index}`;
+function cloneUrlState(setter: React.Dispatch<React.SetStateAction<string>>, nextUrl: string) {
+  setter((prev) => {
+    if (prev) URL.revokeObjectURL(prev);
+    return nextUrl;
+  });
 }
 
-function clampBpmValue(value: number) {
-  return Math.min(240, Math.max(40, Math.round(value)));
-}
-
-type AdjustRailSliderProps = {
-  label: string;
-  min: number;
-  max: number;
-  step?: number;
-  value: number;
-  valueLabel: string;
-  onChange: (next: number) => void;
-  centerValue?: number;
-};
-
-function AdjustRailSlider({
-  label,
-  min,
-  max,
-  step = 1,
-  value,
-  valueLabel,
-  onChange,
-  centerValue
-}: AdjustRailSliderProps) {
-  const safeRange = Math.max(1, max - min);
-  const thumbPercent = ((value - min) / safeRange) * 100;
-  const centerPercent = typeof centerValue === "number" ? ((centerValue - min) / safeRange) * 100 : null;
-
-  return (
-    <div className="rounded-2xl border border-white/5 bg-[#141519] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-      <div className="grid grid-cols-[72px_1fr_auto] items-center gap-2">
-        <div className="pl-2 font-mono text-sm text-white/80">{label}</div>
-
-        <div className="relative h-14 overflow-hidden rounded-xl border border-white/5 bg-[#101114]">
-          <div className="pointer-events-none absolute inset-x-3 top-1/2 h-px -translate-y-1/2 bg-white/10" />
-
-          <div className="pointer-events-none absolute inset-x-3 top-1/2 -translate-y-1/2">
-            <div className="flex items-center justify-between">
-              {Array.from({ length: 13 }).map((_, index) => (
-                <span
-                  key={index}
-                  className={`w-px rounded-full ${index === 6 ? "h-8 bg-white/35" : "h-5 bg-white/18"}`}
-                />
-              ))}
-            </div>
-          </div>
-
-          {centerPercent !== null && (
-            <div
-              className="pointer-events-none absolute top-1/2 h-9 w-[3px] -translate-y-1/2 rounded-full bg-white/90"
-              style={{ left: `calc(${centerPercent}% - 1.5px)` }}
-            />
-          )}
-
-          <div
-            className="pointer-events-none absolute top-1/2 h-10 w-[6px] -translate-y-1/2 rounded-full bg-[#ffe900] shadow-[0_0_0_2px_rgba(0,0,0,0.35)]"
-            style={{ left: `calc(${thumbPercent}% - 3px)` }}
-          />
-
-          <input
-            type="range"
-            min={min}
-            max={max}
-            step={step}
-            value={value}
-            onChange={(event) => onChange(Number(event.target.value))}
-            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-          />
-        </div>
-
-        <div className="min-w-[64px] pr-2 text-right font-mono text-sm font-semibold text-white/75">{valueLabel}</div>
-      </div>
-    </div>
-  );
-}
-
-type FxSectionCardProps = {
-  title: string;
-  subtitle?: string;
-  enabled: boolean;
-  collapsed: boolean;
-  onToggleEnabled: (next: boolean) => void;
-  onToggleCollapsed: () => void;
-  onReset: () => void;
-  children: React.ReactNode;
-};
-
-function FxSectionCard({
-  title,
-  subtitle,
-  enabled,
-  collapsed,
-  onToggleEnabled,
-  onToggleCollapsed,
-  onReset,
-  children
-}: FxSectionCardProps) {
-  return (
-    <div className="rounded-2xl border border-white/5 bg-[#1a1b20] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={onToggleCollapsed}
-          className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-white"
-        >
-          {collapsed ? "+" : "-"} {title}
-        </button>
-        <button
-          type="button"
-          onClick={() => onToggleEnabled(!enabled)}
-          className={`rounded-lg px-2 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${
-            enabled ? "bg-[#ffe900] text-black" : "border border-white/10 bg-white/5 text-white/55"
-          }`}
-        >
-          {enabled ? "On" : "Off"}
-        </button>
-        <button
-          type="button"
-          onClick={onReset}
-          className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs font-semibold text-white/60 hover:text-white"
-        >
-          Reset
-        </button>
-        {subtitle && <p className="ml-auto text-xs text-white/45">{subtitle}</p>}
-      </div>
-      {!collapsed && <div className="mt-3 space-y-2">{children}</div>}
-    </div>
-  );
-}
-
-type FxSliderRowProps = {
+type KnobControlProps = {
   label: string;
   value: number;
   min: number;
   max: number;
   step?: number;
-  onChange: (next: number) => void;
-  valueLabel?: string;
+  onChange: (value: number) => void;
+  formatValue?: (value: number) => string;
 };
 
-function FxSliderRow({ label, value, min, max, step = 1, onChange, valueLabel }: FxSliderRowProps) {
-  return (
-    <div className="grid grid-cols-[110px_1fr_auto] items-center gap-2 rounded-xl border border-white/5 bg-[#141519] px-3 py-2">
-      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-white/60">{label}</span>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="h-2 w-full cursor-pointer accent-[#ffe900]"
-      />
-      <span className="min-w-[56px] text-right font-mono text-xs text-white/80">
-        {valueLabel ?? (Number.isInteger(value) ? String(value) : value.toFixed(2))}
-      </span>
-    </div>
-  );
+function snapKnobValue(value: number, min: number, max: number, step?: number) {
+  const clamped = clamp(value, min, max);
+  if (!step || step <= 0) return clamped;
+  const snapped = Math.round((clamped - min) / step) * step + min;
+  return Number(snapKnobValueToPrecision(snapped, step).toString());
 }
 
-type FxSelectRowProps<T extends string> = {
-  label: string;
-  value: T;
-  onChange: (next: T) => void;
-  options: Array<{ value: T; label: string }>;
-};
-
-function FxSelectRow<T extends string>({ label, value, onChange, options }: FxSelectRowProps<T>) {
-  return (
-    <div className="grid grid-cols-[110px_1fr] items-center gap-2 rounded-xl border border-white/5 bg-[#141519] px-3 py-2">
-      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-white/60">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value as T)}
-        className="h-9 rounded-lg border border-white/10 bg-[#202127] px-2 text-sm text-white"
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
+function snapKnobValueToPrecision(value: number, step: number) {
+  const stepString = String(step);
+  const decimals = stepString.includes(".") ? stepString.split(".")[1]?.length ?? 0 : 0;
+  return Number(value.toFixed(Math.min(4, decimals)));
 }
 
-type FxEqGraphPanelProps = {
-  bands: FxChainSettings["eq"]["bands"];
-  onBandToggle: (index: number) => void;
-  onBandGainChange: (index: number, nextGainDb: number) => void;
-};
+function KnobControl({ label, value, min, max, step = 1, onChange, formatValue }: KnobControlProps) {
+  const knobRef = useRef<HTMLButtonElement | null>(null);
+  const safeRange = Math.max(0.0001, max - min);
+  const normalized = clamp((value - min) / safeRange, 0, 1);
+  const angle = -135 + normalized * 270;
+  const displayValue = formatValue ? formatValue(value) : `${value}`;
 
-function FxEqGraphPanel({ bands, onBandToggle, onBandGainChange }: FxEqGraphPanelProps) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const minDb = -18;
-  const maxDb = 18;
-  const graphWidth = 100;
-  const graphHeight = 100;
-  const plotTop = 14;
-  const plotBottom = 86;
-  const plotHeight = plotBottom - plotTop;
-  const zeroDbY = plotTop + plotHeight / 2;
-
-  const toXPercent = (frequency: number) => {
-    const minHz = 20;
-    const maxHz = 20000;
-    const safeHz = Math.min(maxHz, Math.max(minHz, frequency));
-    const ratio = (Math.log10(safeHz) - Math.log10(minHz)) / (Math.log10(maxHz) - Math.log10(minHz));
-    return 8 + ratio * 84;
+  const updateFromDelta = (startValue: number, deltaPixels: number) => {
+    const pixelsForFullTurn = 180;
+    const next = startValue + (deltaPixels / pixelsForFullTurn) * safeRange;
+    onChange(snapKnobValue(next, min, max, step));
   };
-
-  const toYPercent = (gainDb: number) => {
-    const clamped = Math.min(maxDb, Math.max(minDb, gainDb));
-    const ratio = (clamped - minDb) / (maxDb - minDb);
-    return plotBottom - ratio * plotHeight;
-  };
-
-  const pointerToGain = (clientY: number) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return 0;
-    const topPad = (plotTop / 100) * rect.height;
-    const bottomPad = ((100 - plotBottom) / 100) * rect.height;
-    const usable = Math.max(1, rect.height - topPad - bottomPad);
-    const y = Math.min(rect.height - bottomPad, Math.max(topPad, clientY - rect.top));
-    const ratio = 1 - (y - topPad) / usable;
-    const gain = minDb + ratio * (maxDb - minDb);
-    return Math.round(gain * 2) / 2;
-  };
-
-  const points = bands.map((band) => ({
-    ...band,
-    x: toXPercent(band.frequency),
-    y: toYPercent(band.gainDb)
-  }));
-
-  const curvePath = points
-    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
-    .join(" ");
 
   return (
-    <div className="rounded-[22px] border border-white/5 bg-[#1a1b1f] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-      <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-[0.14em] text-white/55">
-        <span>Equalizer Curve</span>
-        <span>{minDb}..+{maxDb} dB</span>
+    <div className="rounded-xl border border-brand-border bg-white p-2">
+      <div className="mb-2 flex items-center justify-between gap-2 text-xs text-brand-muted">
+        <span>{label}</span>
+        <span className="font-medium text-brand-ink">{displayValue}</span>
       </div>
+      <div className="flex justify-center">
+        <button
+          ref={knobRef}
+          type="button"
+          role="slider"
+          aria-label={label}
+          aria-valuemin={min}
+          aria-valuemax={max}
+          aria-valuenow={Number(value.toFixed(3))}
+          aria-valuetext={displayValue}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            const startX = event.clientX;
+            const startY = event.clientY;
+            const startValue = value;
+            const pointerId = event.pointerId;
+            knobRef.current?.setPointerCapture(pointerId);
 
-      <div ref={containerRef} className="relative h-52 overflow-hidden rounded-[18px] border border-white/5 bg-[#121316]">
-        <svg viewBox={`0 0 ${graphWidth} ${graphHeight}`} className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#ffffff" stopOpacity="0.08" />
-              <stop offset="100%" stopColor="#ffffff" stopOpacity="0.01" />
-            </linearGradient>
-          </defs>
+            const handlePointerMove = (moveEvent: PointerEvent) => {
+              const deltaY = startY - moveEvent.clientY;
+              const deltaX = (moveEvent.clientX - startX) * 0.35;
+              updateFromDelta(startValue, deltaY + deltaX);
+            };
 
-          {[plotTop, plotTop + plotHeight * 0.25, zeroDbY, plotTop + plotHeight * 0.75, plotBottom].map((y) => (
-            <line key={`grid-y-${y}`} x1="0" y1={y} x2={graphWidth} y2={y} stroke="rgba(255,255,255,0.08)" strokeDasharray="1.3 1.8" />
-          ))}
-          {[10, 25, 40, 55, 70, 85].map((x) => (
-            <line key={`grid-x-${x}`} x1={x} y1="0" x2={x} y2={graphHeight} stroke="rgba(255,255,255,0.05)" />
-          ))}
+            const cleanup = () => {
+              window.removeEventListener("pointermove", handlePointerMove);
+              window.removeEventListener("pointerup", handlePointerUp);
+              window.removeEventListener("pointercancel", handlePointerUp);
+              try {
+                knobRef.current?.releasePointerCapture(pointerId);
+              } catch {
+                // no-op if capture is not active anymore
+              }
+            };
 
-          <line x1="0" y1={zeroDbY} x2={graphWidth} y2={zeroDbY} stroke="#ffffff" strokeOpacity="0.75" strokeWidth="0.8" />
+            const handlePointerUp = () => {
+              cleanup();
+            };
 
-          <path d={`${curvePath} L 100 ${zeroDbY} L 0 ${zeroDbY} Z`} fill="url(#eqFill)" />
-          <path d={curvePath} fill="none" stroke="#2d3138" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-
-        {points.map((point, index) => (
-          <button
-            key={`${point.label}-${index}`}
-            type="button"
-            title={`${point.label}: ${point.gainDb > 0 ? "+" : ""}${point.gainDb.toFixed(1)} dB`}
-            onDoubleClick={() => onBandToggle(index)}
-            onPointerDown={(event) => {
+            window.addEventListener("pointermove", handlePointerMove);
+            window.addEventListener("pointerup", handlePointerUp, { once: true });
+            window.addEventListener("pointercancel", handlePointerUp, { once: true });
+          }}
+          onKeyDown={(event) => {
+            const keyboardStep = step || safeRange / 100;
+            if (event.key === "ArrowUp" || event.key === "ArrowRight") {
               event.preventDefault();
-              event.currentTarget.setPointerCapture(event.pointerId);
-              onBandGainChange(index, pointerToGain(event.clientY));
-            }}
-            onPointerMove={(event) => {
-              if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-              onBandGainChange(index, pointerToGain(event.clientY));
-            }}
-            onPointerUp={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
-            }}
-            onPointerCancel={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
-            }}
-            className={`absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 shadow-sm transition ${
-              point.enabled
-                ? "border-white bg-white"
-                : "border-white/35 bg-[#1a1b1f]"
-            }`}
-            style={{ left: `${point.x}%`, top: `${point.y}%` }}
+              onChange(snapKnobValue(value + keyboardStep, min, max, step));
+              return;
+            }
+            if (event.key === "ArrowDown" || event.key === "ArrowLeft") {
+              event.preventDefault();
+              onChange(snapKnobValue(value - keyboardStep, min, max, step));
+              return;
+            }
+            if (event.key === "PageUp") {
+              event.preventDefault();
+              onChange(snapKnobValue(value + keyboardStep * 5, min, max, step));
+              return;
+            }
+            if (event.key === "PageDown") {
+              event.preventDefault();
+              onChange(snapKnobValue(value - keyboardStep * 5, min, max, step));
+              return;
+            }
+            if (event.key === "Home") {
+              event.preventDefault();
+              onChange(snapKnobValue(min, min, max, step));
+              return;
+            }
+            if (event.key === "End") {
+              event.preventDefault();
+              onChange(snapKnobValue(max, min, max, step));
+            }
+          }}
+          className="group relative h-16 w-16 rounded-full border border-[#c8d8c1] bg-[#edf4e8] outline-none ring-offset-2 transition hover:border-[#7ca27f] focus-visible:ring-2 focus-visible:ring-[#7ca27f]"
+        >
+          <div className="absolute inset-[4px] rounded-full border border-[#cfdcc9] bg-[#f8fbf4]" />
+          <div
+            className="absolute inset-0"
+            style={{ transform: `rotate(${angle}deg)` }}
           >
-            <span className="sr-only">{point.label}</span>
-          </button>
-        ))}
-
-        <div className="pointer-events-none absolute inset-x-3 bottom-2 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.12em] text-white/40">
-          <span>Low</span>
-          <span>Mid</span>
-          <span>High</span>
-        </div>
+            <span className="absolute left-1/2 top-[7px] block h-4 w-1 -translate-x-1/2 rounded-full bg-[#315f3b]" />
+          </div>
+        <span className="sr-only">{displayValue}</span>
+        </button>
       </div>
-
-      <p className="mt-2 text-xs text-white/45">Тяни точки вверх/вниз для `Gain`. Двойной клик по точке — on/off полосы.</p>
     </div>
   );
 }
 
 export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrackRecorderProps>(function MultiTrackRecorder(
-  { onReady, onError, onReset, resetKey = 0 },
+  { onReady, onError, onReset, resetKey = 0, armedTrackTemplate = null, onSessionSnapshotChange },
   ref
 ) {
+  const [tab, setTab] = useState<RecorderTab>("tracks");
   const [recordingState, setRecordingState] = useState<RecordingState>("idle");
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [layers, setLayers] = useState<Layer[]>([]);
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+
   const [bpm, setBpm] = useState(90);
   const [bpmInputValue, setBpmInputValue] = useState("90");
-  const [topPopover, setTopPopover] = useState<TopPopover>(null);
-  const [songKeyRoot, setSongKeyRoot] = useState<string | null>("Eb");
+  const [songKeyRoot, setSongKeyRoot] = useState<string | null>(null);
   const [songKeyMode, setSongKeyMode] = useState<TonalMode>("minor");
-  const [songKeyAutoEnabled, setSongKeyAutoEnabled] = useState(false);
   const [bpmAutoEnabled, setBpmAutoEnabled] = useState(false);
-  const [autoAnalysisLoading, setAutoAnalysisLoading] = useState<TopPopover>(null);
-  const [autoAnalysisError, setAutoAnalysisError] = useState("");
+  const [songKeyAutoEnabled, setSongKeyAutoEnabled] = useState(false);
+  const [autoDetectLoading, setAutoDetectLoading] = useState<AutoDetectTarget>(null);
+  const [autoDetectError, setAutoDetectError] = useState("");
   const [metronomeEnabled, setMetronomeEnabled] = useState(true);
-  const [mixPreviewUrl, setMixPreviewUrl] = useState("");
-  const [mixing, setMixing] = useState(false);
-  const [signalLevel, setSignalLevel] = useState(0);
-  const [activePanel, setActivePanel] = useState<RecorderPanel>("adjust");
-  const [adjustMode, setAdjustMode] = useState<AdjustMode>("varispeed");
-  const [varispeedPercent, setVarispeedPercent] = useState(100);
-  const [pitchSemitones, setPitchSemitones] = useState(0);
-  const [inputGainPercent, setInputGainPercent] = useState(100);
-  const [outputGainPercent, setOutputGainPercent] = useState(100);
-  const [loopStartPercent, setLoopStartPercent] = useState(0);
-  const [loopEndPercent, setLoopEndPercent] = useState(100);
+  const [metronomePreviewPlaying, setMetronomePreviewPlaying] = useState(false);
+
   const [fxSettingsByLayerId, setFxSettingsByLayerId] = useState<Record<string, FxChainSettings>>({});
   const [fxPreviewUrl, setFxPreviewUrl] = useState("");
-  const [fxPreviewStatus, setFxPreviewStatus] = useState<FxPreviewStatus>("idle");
+  const [fxPreviewStatus, setFxPreviewStatus] = useState<AsyncStatus>("idle");
   const [fxPreviewError, setFxPreviewError] = useState("");
-  const [fxAutoPreviewEnabled, setFxAutoPreviewEnabled] = useState(true);
-  const [stemsPreviewUrl, setStemsPreviewUrl] = useState("");
-  const [stemsPreviewStatus, setStemsPreviewStatus] = useState<FxPreviewStatus>("idle");
-  const [stemsPreviewError, setStemsPreviewError] = useState("");
-  const [pendingRecordedTake, setPendingRecordedTake] = useState<PendingRecordedTake | null>(null);
-  const [fxBlockCollapsed, setFxBlockCollapsed] = useState<Record<FxBlockUiKey, boolean>>({
+  const [fxPanelsOpen, setFxPanelsOpen] = useState<Record<FxPanelId, boolean>>({
     eq: false,
-    autotune: true,
-    distortion: true,
-    filter: true,
+    reverb: false,
     delay: false,
-    reverb: true
+    filter: false,
+    driveTune: false
   });
+
+  const [stemsPreviewUrl, setStemsPreviewUrl] = useState("");
+  const [stemsPreviewStatus, setStemsPreviewStatus] = useState<AsyncStatus>("idle");
+  const [stemsPreviewError, setStemsPreviewError] = useState("");
+
+  const [mixPreviewUrl, setMixPreviewUrl] = useState("");
+  const [mixing, setMixing] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
+  const discardRecordingOnStopRef = useRef(false);
   const timerRef = useRef<number | null>(null);
+  const recordingSecondsRef = useRef(0);
   const backingAudioRef = useRef<HTMLAudioElement[]>([]);
   const metronomeCtxRef = useRef<AudioContext | null>(null);
-  const metronomeTickRef = useRef<number | null>(null);
-  const meterCtxRef = useRef<AudioContext | null>(null);
-  const meterAnalyserRef = useRef<AnalyserNode | null>(null);
-  const meterRafRef = useRef<number | null>(null);
-  const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const waveformHistoryRef = useRef<number[]>(Array.from({ length: WAVEFORM_SAMPLES }, () => 0.02));
-  const waveformPushTsRef = useRef(0);
-  const waveformLevelTsRef = useRef(0);
-  const fxPreviewDebounceRef = useRef<number | null>(null);
-  const fxPreviewRenderSeqRef = useRef(0);
-  const stemsPreviewRenderSeqRef = useRef(0);
+  const metronomeIntervalRef = useRef<number | null>(null);
   const decodedLayerCacheRef = useRef<Map<string, AudioBuffer>>(new Map());
+  const layersRef = useRef<Layer[]>([]);
+  const recordWaveCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const recordWaveCtxRef = useRef<AudioContext | null>(null);
+  const recordWaveSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const recordWaveAnalyserRef = useRef<AnalyserNode | null>(null);
+  const recordWaveDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  const recordWaveRafRef = useRef<number | null>(null);
+  const recordWaveDrawRef = useRef<((timestamp: number) => void) | null>(null);
+  const recordWavePausedRef = useRef(false);
+  const recordWaveHistoryRef = useRef<number[]>([]);
+  const recordWaveLastSampleAtRef = useRef(0);
+  const beatFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const canStart = (recordingState === "idle" || recordingState === "stopped") && !pendingRecordedTake;
-  const canPause = recordingState === "recording";
-  const canResume = recordingState === "paused";
-  const canStop = recordingState === "recording" || recordingState === "paused";
-  const activeLayerCount = useMemo(() => layers.filter((layer) => !layer.muted).length, [layers]);
-  const lastRecordedLayer = useMemo(
-    () => [...layers].reverse().find((layer) => layer.kind === "recording") ?? null,
-    [layers]
+  useEffect(() => {
+    layersRef.current = layers;
+  }, [layers]);
+
+  const selectedLayer = useMemo(() => layers.find((layer) => layer.id === selectedLayerId) ?? null, [layers, selectedLayerId]);
+  const selectedRecordedLayer = useMemo(
+    () => (selectedLayer?.kind === "recording" ? selectedLayer : null),
+    [selectedLayer]
   );
-  const lastRecordedLayerFxSettings = useMemo(
-    () => (lastRecordedLayer ? fxSettingsByLayerId[lastRecordedLayer.id] ?? createDefaultFxChainSettings() : null),
-    [fxSettingsByLayerId, lastRecordedLayer]
+  const selectedRecordedLayerFx = useMemo(
+    () => (selectedRecordedLayer ? fxSettingsByLayerId[selectedRecordedLayer.id] ?? createDefaultFxChainSettings() : null),
+    [fxSettingsByLayerId, selectedRecordedLayer]
   );
-  const lastTakeAdjustSettings = useMemo<RecorderAdjustSettings>(
-    () => ({
-      varispeedPercent,
-      pitchSemitones,
-      inputGainPercent,
-      outputGainPercent
-    }),
-    [inputGainPercent, outputGainPercent, pitchSemitones, varispeedPercent]
-  );
-  const lastTakeHasActiveAdjust = useMemo(() => hasActiveRecorderAdjust(lastTakeAdjustSettings), [lastTakeAdjustSettings]);
-  const lastRecordedLayerHasEnabledFx = Boolean(lastRecordedLayerFxSettings && hasEnabledFx(lastRecordedLayerFxSettings));
-  const lastTakeNeedsProcessedPreview = Boolean(lastRecordedLayer && (lastTakeHasActiveAdjust || lastRecordedLayerHasEnabledFx));
-  const latestLayerDuration = layers[layers.length - 1]?.durationSec ?? 0;
-  const primaryActionLabel = canPause ? "Pause" : canResume ? "Resume" : layers.length ? "Record Next" : "Record";
-  const statusHint =
-    recordingState === "recording"
-      ? "Recording..."
-      : recordingState === "paused"
-        ? "Paused"
-        : `${Math.round(signalLevel * 100)}% input level`;
-  const displayedTotalDuration = Math.max(recordingSeconds, latestLayerDuration);
-  const playheadPercent = displayedTotalDuration > 0 ? Math.min(100, (recordingSeconds / displayedTotalDuration) * 100) : 0;
-  const lastTakePreviewSrc =
-    lastRecordedLayer && lastTakeNeedsProcessedPreview && fxPreviewStatus === "ready" && fxPreviewUrl ? fxPreviewUrl : lastRecordedLayer?.url ?? "";
-  const lastTakePreviewBadge =
-    lastRecordedLayer && lastTakeNeedsProcessedPreview && fxPreviewStatus === "ready" ? "Processed preview" : "Dry preview";
-  const loopPreviewRange = useMemo(() => clampLoopPercentRange(loopStartPercent, loopEndPercent), [loopEndPercent, loopStartPercent]);
-  const sessionRenderBusy = mixing || stemsPreviewStatus === "processing" || Boolean(pendingRecordedTake);
-  const showPendingTakeReview = Boolean(pendingRecordedTake);
-  const hasBackingForOverdub = activeLayerCount > 0;
-  const showMultitrackLaneOverlay =
-    hasBackingForOverdub && (recordingState === "recording" || recordingState === "paused" || showPendingTakeReview);
-  const recorderTitle = "cream recording";
-  const recorderSubtitle = "untitled project • Maryen";
-  const keyChipLabel = formatKeyChipLabel(songKeyRoot, songKeyMode, songKeyAutoEnabled);
+
+  function toggleFxPanel(panelId: FxPanelId) {
+    setFxPanelsOpen((current) => ({ ...current, [panelId]: !current[panelId] }));
+  }
+
+  useEffect(() => {
+    if (!layers.length) {
+      setSelectedLayerId(null);
+      return;
+    }
+    setSelectedLayerId((prev) => (prev && layers.some((layer) => layer.id === prev) ? prev : layers[layers.length - 1]?.id ?? null));
+  }, [layers]);
 
   useEffect(() => {
     setBpmInputValue(String(bpm));
   }, [bpm]);
 
-  function clearFxPreviewDebounce() {
-    if (fxPreviewDebounceRef.current) {
-      window.clearTimeout(fxPreviewDebounceRef.current);
-      fxPreviewDebounceRef.current = null;
+  useEffect(() => {
+    if (!onSessionSnapshotChange) return;
+    onSessionSnapshotChange({
+      bpm,
+      bpmAutoEnabled,
+      songKeyRoot,
+      songKeyMode,
+      songKeyAutoEnabled,
+      selectedLayerId,
+      layers: layers.map((layer) => ({
+        id: layer.id,
+        kind: layer.kind,
+        role: layer.role,
+        name: layer.name,
+        muted: layer.muted,
+        volume: layer.volume,
+        pan: layer.pan,
+        durationSec: layer.durationSec
+      })),
+      hasStemsPreview: Boolean(stemsPreviewUrl),
+      hasMixPreview: Boolean(mixPreviewUrl)
+    });
+  }, [
+    bpm,
+    bpmAutoEnabled,
+    layers,
+    mixPreviewUrl,
+    onSessionSnapshotChange,
+    selectedLayerId,
+    songKeyAutoEnabled,
+    songKeyMode,
+    songKeyRoot,
+    stemsPreviewUrl
+  ]);
+
+  useEffect(() => {
+    drawRecordWaveIdle();
+    const redraw = () => drawRecordWaveIdle();
+    window.addEventListener("resize", redraw);
+    return () => {
+      window.removeEventListener("resize", redraw);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function clearTimer() {
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
     }
   }
 
-  function clearFxPreviewUrl() {
+  function cancelRecordWaveRaf() {
+    if (recordWaveRafRef.current !== null) {
+      window.cancelAnimationFrame(recordWaveRafRef.current);
+      recordWaveRafRef.current = null;
+    }
+  }
+
+  function drawRecordWaveIdle() {
+    const canvas = recordWaveCanvasRef.current;
+    if (!canvas) return;
+    const width = Math.max(1, canvas.clientWidth || 320);
+    const height = Math.max(1, canvas.clientHeight || 80);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#f7faf2";
+    ctx.fillRect(0, 0, width, height);
+    ctx.strokeStyle = "#cfdcc9";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, height / 2);
+    ctx.lineTo(width, height / 2);
+    ctx.stroke();
+  }
+
+  function startRecordWaveMonitor(stream: MediaStream) {
+    try {
+      recordWavePausedRef.current = false;
+      cancelRecordWaveRaf();
+      if (recordWaveSourceRef.current) {
+        recordWaveSourceRef.current.disconnect();
+        recordWaveSourceRef.current = null;
+      }
+      if (recordWaveAnalyserRef.current) {
+        recordWaveAnalyserRef.current.disconnect();
+      }
+      if (recordWaveCtxRef.current) {
+        recordWaveCtxRef.current.close().catch(() => null);
+      }
+
+      const audioCtx = new window.AudioContext();
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.82;
+      source.connect(analyser);
+
+      recordWaveCtxRef.current = audioCtx;
+      recordWaveSourceRef.current = source;
+      recordWaveAnalyserRef.current = analyser;
+      recordWaveDataRef.current = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+      recordWaveHistoryRef.current = [];
+      recordWaveLastSampleAtRef.current = 0;
+
+      const draw = (timestamp: number) => {
+        if (recordWavePausedRef.current) {
+          recordWaveRafRef.current = null;
+          return;
+        }
+        const canvas = recordWaveCanvasRef.current;
+        const activeAnalyser = recordWaveAnalyserRef.current;
+        const data = recordWaveDataRef.current;
+        if (!canvas || !activeAnalyser || !data) {
+          drawRecordWaveIdle();
+          recordWaveRafRef.current = null;
+          return;
+        }
+
+        const width = Math.max(1, canvas.clientWidth || 320);
+        const height = Math.max(1, canvas.clientHeight || 80);
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          recordWaveRafRef.current = window.requestAnimationFrame(draw);
+          return;
+        }
+
+        const now = Number.isFinite(timestamp) ? timestamp : performance.now();
+        const minFrameDeltaMs = 55;
+        if (now - recordWaveLastSampleAtRef.current >= minFrameDeltaMs) {
+          activeAnalyser.getByteTimeDomainData(data);
+          let energy = 0;
+          for (let i = 0; i < data.length; i += 1) {
+            const normalized = (data[i] - 128) / 128;
+            energy += normalized * normalized;
+          }
+          const rms = Math.sqrt(energy / data.length);
+          const history = recordWaveHistoryRef.current;
+          const prev = history.length ? history[history.length - 1] ?? 0 : 0;
+          const smoothed = prev * 0.72 + rms * 0.28;
+          const clamped = clamp(smoothed, 0.02, 1);
+
+          const stepPx = 3;
+          const maxPoints = Math.max(24, Math.floor(width / stepPx));
+          history.push(clamped);
+          while (history.length > maxPoints) history.shift();
+          recordWaveLastSampleAtRef.current = now;
+        }
+
+        const history = recordWaveHistoryRef.current;
+        ctx.clearRect(0, 0, width, height);
+        ctx.fillStyle = "#f7faf2";
+        ctx.fillRect(0, 0, width, height);
+
+        ctx.strokeStyle = "#d8e3d2";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, height / 2);
+        ctx.lineTo(width, height / 2);
+        ctx.stroke();
+
+        if (history.length > 0) {
+          const stepPx = 3;
+          const centerY = height / 2;
+          const maxAmp = height * 0.4;
+
+          ctx.strokeStyle = "#315f3b";
+          ctx.lineWidth = 2;
+          ctx.lineCap = "round";
+          for (let i = 0; i < history.length; i += 1) {
+            const x = width - (history.length - 1 - i) * stepPx;
+            const amp = (history[i] ?? 0) * maxAmp;
+            ctx.beginPath();
+            ctx.moveTo(x, centerY - amp);
+            ctx.lineTo(x, centerY + amp);
+            ctx.stroke();
+          }
+        }
+        if (recordWavePausedRef.current) {
+          recordWaveRafRef.current = null;
+          return;
+        }
+        recordWaveRafRef.current = window.requestAnimationFrame(draw);
+      };
+
+      recordWaveDrawRef.current = draw;
+      recordWaveRafRef.current = window.requestAnimationFrame(draw);
+    } catch {
+      drawRecordWaveIdle();
+    }
+  }
+
+  function pauseRecordWaveMonitor() {
+    recordWavePausedRef.current = true;
+    cancelRecordWaveRaf();
+  }
+
+  function resumeRecordWaveMonitor() {
+    if (!recordWaveAnalyserRef.current || !recordWaveDrawRef.current) return;
+    recordWavePausedRef.current = false;
+    if (recordWaveRafRef.current === null) {
+      recordWaveRafRef.current = window.requestAnimationFrame(recordWaveDrawRef.current);
+    }
+  }
+
+  function stopRecordWaveMonitor() {
+    recordWavePausedRef.current = false;
+    cancelRecordWaveRaf();
+    recordWaveDrawRef.current = null;
+    if (recordWaveSourceRef.current) {
+      try {
+        recordWaveSourceRef.current.disconnect();
+      } catch {}
+      recordWaveSourceRef.current = null;
+    }
+    if (recordWaveAnalyserRef.current) {
+      try {
+        recordWaveAnalyserRef.current.disconnect();
+      } catch {}
+      recordWaveAnalyserRef.current = null;
+    }
+    if (recordWaveCtxRef.current) {
+      recordWaveCtxRef.current.close().catch(() => null);
+      recordWaveCtxRef.current = null;
+    }
+    recordWaveDataRef.current = null;
+    recordWaveHistoryRef.current = [];
+    recordWaveLastSampleAtRef.current = 0;
+    drawRecordWaveIdle();
+  }
+
+  function stopStream() {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    stopRecordWaveMonitor();
+  }
+
+  function stopBackingTracks() {
+    backingAudioRef.current.forEach((audio) => {
+      audio.pause();
+      audio.currentTime = 0;
+    });
+    backingAudioRef.current = [];
+  }
+
+  function pauseBackingTracks() {
+    backingAudioRef.current.forEach((audio) => audio.pause());
+  }
+
+  function resumeBackingTracks() {
+    backingAudioRef.current.forEach((audio) => {
+      audio.play().catch(() => null);
+    });
+  }
+
+  function startBackingTracks() {
+    stopBackingTracks();
+    const list = layersRef.current.filter((layer) => !layer.muted);
+    backingAudioRef.current = list.map((layer) => {
+      const audio = new Audio(layer.url);
+      audio.volume = clamp(layer.volume, 0, 1);
+      audio.currentTime = 0;
+      return audio;
+    });
+    backingAudioRef.current.forEach((audio) => audio.play().catch(() => null));
+  }
+
+  function stopMetronome() {
+    if (metronomeIntervalRef.current) {
+      window.clearInterval(metronomeIntervalRef.current);
+      metronomeIntervalRef.current = null;
+    }
+    if (metronomeCtxRef.current) {
+      metronomeCtxRef.current.close().catch(() => null);
+      metronomeCtxRef.current = null;
+    }
+  }
+
+  function metronomeTick(audioCtx: AudioContext, accent: boolean) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = accent ? 1300 : 960;
+    gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(accent ? 0.16 : 0.1, audioCtx.currentTime + 0.003);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.045);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.05);
+  }
+
+  function startMetronome(force = false) {
+    if (!force && !metronomeEnabled) return;
+    stopMetronome();
+    const audioCtx = new window.AudioContext();
+    metronomeCtxRef.current = audioCtx;
+    let beat = 0;
+    metronomeTick(audioCtx, true);
+    metronomeIntervalRef.current = window.setInterval(() => {
+      beat = (beat + 1) % 4;
+      metronomeTick(audioCtx, beat === 0);
+    }, Math.max(120, Math.round(60000 / bpm)));
+  }
+
+  function stopAllPlaybackHelpers() {
+    clearTimer();
+    stopBackingTracks();
+    stopMetronome();
+    setMetronomePreviewPlaying(false);
+  }
+
+  function revokeLayerUrls(list: Layer[]) {
+    list.forEach((layer) => URL.revokeObjectURL(layer.url));
+  }
+
+  function clearPreviewUrls() {
     setFxPreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return "";
     });
-  }
-
-  function clearStemsPreviewUrl() {
     setStemsPreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return "";
     });
-  }
-
-  function resetFxPreviewState() {
-    clearFxPreviewDebounce();
-    fxPreviewRenderSeqRef.current += 1;
-    clearFxPreviewUrl();
+    setMixPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return "";
+    });
     setFxPreviewStatus("idle");
     setFxPreviewError("");
-  }
-
-  function resetStemsPreviewState() {
-    stemsPreviewRenderSeqRef.current += 1;
-    clearStemsPreviewUrl();
     setStemsPreviewStatus("idle");
     setStemsPreviewError("");
   }
 
-  function clearPendingRecordedTake() {
-    setPendingRecordedTake((prev) => {
-      if (prev) {
-        URL.revokeObjectURL(prev.url);
+  function resetRecorderSession(emitReset = true) {
+    try {
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        recorderRef.current.stop();
       }
-      return null;
-    });
-  }
-
-  function commitPendingRecordedTake() {
-    if (!pendingRecordedTake) return;
-    const takeToCommit = pendingRecordedTake;
-    setPendingRecordedTake(null);
-    setLayers((prev) => [
-      ...prev,
-      {
-        ...takeToCommit,
-        kind: "recording" as const,
-        muted: false,
-        volume: 0.9
-      }
-    ]);
-    setFxSettingsByLayerId((prev) => ({
-      ...prev,
-      [takeToCommit.id]: createDefaultFxChainSettings()
-    }));
-    setRecordingState("stopped");
-    setActivePanel("adjust");
-  }
-
-  function discardPendingRecordedTake() {
-    if (!pendingRecordedTake) return;
-    clearPendingRecordedTake();
-    setRecordingState(layers.length ? "stopped" : "idle");
+    } catch {}
+    recorderRef.current = null;
+    stopStream();
+    stopAllPlaybackHelpers();
+    setRecordingState("idle");
+    recordingSecondsRef.current = 0;
     setRecordingSeconds(0);
-    resetWaveform();
+    decodedLayerCacheRef.current.clear();
+    clearPreviewUrls();
+    setLayers((prev) => {
+      revokeLayerUrls(prev);
+      return [];
+    });
+    setSelectedLayerId(null);
+    setFxSettingsByLayerId({});
+    setTab("tracks");
+    setBpm(90);
+    setBpmAutoEnabled(false);
+    setSongKeyRoot(null);
+    setSongKeyMode("minor");
+    setSongKeyAutoEnabled(false);
+    setAutoDetectLoading(null);
+    setAutoDetectError("");
+    onError("");
+    if (emitReset) onReset?.();
   }
+
+  useEffect(() => {
+    resetRecorderSession(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey]);
+
+  useEffect(() => {
+    const cache = decodedLayerCacheRef.current;
+    return () => {
+      clearTimer();
+      stopBackingTracks();
+      stopMetronome();
+      stopStream();
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        try {
+          recorderRef.current.stop();
+        } catch {}
+      }
+      cache.clear();
+      revokeLayerUrls(layersRef.current);
+      setFxPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return prev;
+      });
+      setStemsPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return prev;
+      });
+      setMixPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return prev;
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function decodeLayerBuffer(layer: Layer): Promise<AudioBuffer> {
     const cached = decodedLayerCacheRef.current.get(layer.id);
@@ -694,710 +862,333 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
     }
   }
 
-  function updateFxForLastRecorded(updater: (prev: FxChainSettings) => FxChainSettings) {
-    if (!lastRecordedLayer) return;
+  function updateLayer(layerId: string, updater: (layer: Layer) => Layer) {
+    setLayers((prev) => prev.map((layer) => (layer.id === layerId ? updater(layer) : layer)));
+  }
+
+  function updateSelectedLayerFx(updater: (current: FxChainSettings) => FxChainSettings) {
+    if (!selectedRecordedLayer) return;
     setFxSettingsByLayerId((prev) => {
-      const current = prev[lastRecordedLayer.id] ?? createDefaultFxChainSettings();
-      return {
-        ...prev,
-        [lastRecordedLayer.id]: updater(current)
-      };
+      const current = prev[selectedRecordedLayer.id] ?? createDefaultFxChainSettings();
+      return { ...prev, [selectedRecordedLayer.id]: updater(current) };
     });
   }
 
-  function setFxBlockEnabled(block: keyof FxChainSettings, enabled: boolean) {
-    updateFxForLastRecorded((prev) => ({
-      ...prev,
-      [block]: { ...prev[block], enabled }
-    }));
+  function applyFxPreset(preset: "clean" | "warm" | "doubleWide" | "phone") {
+    updateSelectedLayerFx(() => {
+      const base = createDefaultFxChainSettings();
+      if (preset === "clean") return base;
+      if (preset === "warm") {
+        base.eq.enabled = true;
+        base.eq.bands[0].gainDb = 2;
+        base.eq.bands[2].gainDb = 1.5;
+        base.eq.bands[4].gainDb = 2.5;
+        base.reverb.enabled = true;
+        base.reverb.mix = 20;
+        return base;
+      }
+      if (preset === "doubleWide") {
+        base.delay.enabled = true;
+        base.delay.mix = 28;
+        base.delay.feedback = 18;
+        base.delay.timeMs = 90;
+        base.reverb.enabled = true;
+        base.reverb.mix = 18;
+        base.filter.enabled = false;
+        return base;
+      }
+      base.filter.enabled = true;
+      base.filter.mode = "bandpass";
+      base.filter.cutoff = 1700;
+      base.filter.resonance = 2.4;
+      base.filter.mix = 80;
+      base.distortion.enabled = true;
+      base.distortion.drive = 16;
+      base.distortion.mix = 15;
+      return base;
+    });
   }
 
-  function enableAllFx() {
-    updateFxForLastRecorded((prev) => ({
-      ...prev,
-      eq: { ...prev.eq, enabled: true },
-      autotune: { ...prev.autotune, enabled: true },
-      distortion: { ...prev.distortion, enabled: true },
-      filter: { ...prev.filter, enabled: true },
-      delay: { ...prev.delay, enabled: true },
-      reverb: { ...prev.reverb, enabled: true }
-    }));
-  }
-
-  function toggleFxBlockCollapsed(block: FxBlockUiKey) {
-    setFxBlockCollapsed((prev) => ({ ...prev, [block]: !prev[block] }));
-  }
-
-  function resetFxBlock(block: keyof FxChainSettings) {
-    const defaults = createDefaultFxChainSettings();
-    updateFxForLastRecorded((prev) => ({
-      ...prev,
-      [block]: defaults[block]
-    }));
-  }
-
-  function bypassAllFx() {
-    updateFxForLastRecorded((prev) => ({
-      ...prev,
-      eq: { ...prev.eq, enabled: false },
-      autotune: { ...prev.autotune, enabled: false },
-      distortion: { ...prev.distortion, enabled: false },
-      filter: { ...prev.filter, enabled: false },
-      delay: { ...prev.delay, enabled: false },
-      reverb: { ...prev.reverb, enabled: false }
-    }));
-  }
-
-  async function processLayerForSessionRender(
-    layer: Layer,
-    audioBuffer: AudioBuffer,
-    options: {
-      lastTakeId: string | null;
-      adjustSettings: RecorderAdjustSettings;
-      applyAdjustToLastTake: boolean;
-      fxSettingsForLastTake: FxChainSettings | null;
-      applyFxToLastTake: boolean;
-      bpmForFx: number;
-    }
-  ): Promise<AudioBuffer> {
-    if (!options.lastTakeId || layer.id !== options.lastTakeId) {
-      return audioBuffer;
-    }
-
-    let nextBuffer = audioBuffer;
-    if (options.applyAdjustToLastTake) {
-      nextBuffer = await renderAdjustedBufferMvp({
-        inputBuffer: nextBuffer,
-        settings: options.adjustSettings
-      });
-    }
-
-    if (options.applyFxToLastTake && options.fxSettingsForLastTake) {
-      nextBuffer = await processAudioBufferWithFx({
-        inputBuffer: nextBuffer,
-        settings: options.fxSettingsForLastTake,
-        bpm: options.bpmForFx
-      });
-    }
-
-    return nextBuffer;
+  async function processLayerForRender(layer: Layer, decoded: AudioBuffer): Promise<AudioBuffer> {
+    if (layer.kind !== "recording") return decoded;
+    const settings = fxSettingsByLayerId[layer.id];
+    if (!settings || !hasEnabledFx(settings)) return decoded;
+    return processAudioBufferWithFx({ inputBuffer: decoded, settings, bpm });
   }
 
   async function renderSessionAudioBlob(): Promise<{ blob: Blob; durationSec: number }> {
-    if (!layers.length) {
-      throw new Error("Сначала запиши хотя бы одну дорожку.");
-    }
-
     const activeLayers = layers.filter((layer) => !layer.muted);
     if (!activeLayers.length) {
-      throw new Error("Все дорожки выключены. Включи хотя бы одну для сведения.");
+      throw new Error("Включи хотя бы одну дорожку для preview/render.");
     }
-
-    const lastTakeId = lastRecordedLayer?.id ?? null;
-    const fxSettingsForLastTake = lastTakeId ? fxSettingsByLayerId[lastTakeId] ?? createDefaultFxChainSettings() : null;
-    const applyFxToLastTake = Boolean(lastTakeId && fxSettingsForLastTake && hasEnabledFx(fxSettingsForLastTake));
-    const applyAdjustToLastTake = Boolean(lastTakeId && hasActiveRecorderAdjust(lastTakeAdjustSettings));
 
     const processed = await Promise.all(
       activeLayers.map(async (layer) => {
         const decoded = await decodeLayerBuffer(layer);
-        const audioBuffer = await processLayerForSessionRender(layer, decoded, {
-          lastTakeId,
-          adjustSettings: lastTakeAdjustSettings,
-          applyAdjustToLastTake,
-          fxSettingsForLastTake,
-          applyFxToLastTake,
-          bpmForFx: bpm
-        });
-        return { layer, audioBuffer };
+        const buffer = await processLayerForRender(layer, decoded);
+        return { layer, buffer };
       })
     );
 
-    const sampleRate = processed[0]?.audioBuffer.sampleRate ?? 44100;
-    const totalLength = processed.reduce((max, item) => Math.max(max, item.audioBuffer.length), 0);
-    const offline = new OfflineAudioContext(1, Math.max(1, totalLength), sampleRate);
+    const sampleRate = processed[0]?.buffer.sampleRate ?? 44100;
+    const totalLength = processed.reduce((max, item) => Math.max(max, item.buffer.length), 0);
+    const offline = new OfflineAudioContext(2, Math.max(1, totalLength), sampleRate);
 
-    processed.forEach(({ layer, audioBuffer }) => {
+    processed.forEach(({ layer, buffer }) => {
       const source = offline.createBufferSource();
-      source.buffer = audioBuffer;
+      source.buffer = buffer;
       const gain = offline.createGain();
-      gain.gain.value = layer.volume;
-      source.connect(gain).connect(offline.destination);
+      gain.gain.value = clamp(layer.volume, 0, 1);
+      const panner = offline.createStereoPanner();
+      panner.pan.value = clampPanValue(layer.pan) / 100;
+      source.connect(gain).connect(panner).connect(offline.destination);
       source.start(0);
     });
 
     const rendered = await offline.startRendering();
-    return {
-      blob: encodeWavFromBuffer(rendered),
-      durationSec: Math.round(rendered.duration)
-    };
+    return { blob: encodeWavFromBuffer(rendered), durationSec: Math.round(rendered.duration) };
   }
 
-  async function renderFxPreviewNow() {
-    const targetLayer = lastRecordedLayer;
-    const settings = lastRecordedLayerFxSettings;
-    const hasAdjust = hasActiveRecorderAdjust(lastTakeAdjustSettings);
-    const hasFx = Boolean(settings && hasEnabledFx(settings));
-    if (!targetLayer) {
-      resetFxPreviewState();
-      return;
-    }
-    if (!settings) {
-      resetFxPreviewState();
-      return;
-    }
-    if (!hasAdjust && !hasFx) {
-      clearFxPreviewDebounce();
-      clearFxPreviewUrl();
+  async function renderSelectedFxPreview() {
+    if (!selectedRecordedLayer || !selectedRecordedLayerFx) {
       setFxPreviewStatus("idle");
       setFxPreviewError("");
       return;
     }
 
-    const renderSeq = ++fxPreviewRenderSeqRef.current;
     setFxPreviewStatus("processing");
     setFxPreviewError("");
+    onError("");
 
     try {
-      const decoded = await decodeLayerBuffer(targetLayer);
-      const processedBuffer = await processLayerForSessionRender(targetLayer, decoded, {
-        lastTakeId: targetLayer.id,
-        adjustSettings: lastTakeAdjustSettings,
-        applyAdjustToLastTake: hasAdjust,
-        fxSettingsForLastTake: settings,
-        applyFxToLastTake: hasFx,
-        bpmForFx: bpm
-      });
-      const nextUrl = URL.createObjectURL(encodeWavFromBuffer(processedBuffer));
-      if (renderSeq !== fxPreviewRenderSeqRef.current) {
-        URL.revokeObjectURL(nextUrl);
-        return;
-      }
-      setFxPreviewUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return nextUrl;
-      });
+      const decoded = await decodeLayerBuffer(selectedRecordedLayer);
+      const processed = await processLayerForRender(selectedRecordedLayer, decoded);
+      const url = URL.createObjectURL(encodeWavFromBuffer(processed));
+      cloneUrlState(setFxPreviewUrl, url);
       setFxPreviewStatus("ready");
-      setFxPreviewError("");
     } catch (error) {
-      if (renderSeq !== fxPreviewRenderSeqRef.current) return;
-      clearFxPreviewUrl();
       setFxPreviewStatus("error");
-      setFxPreviewError(error instanceof Error ? error.message : "Preview render failed.");
+      setFxPreviewError(error instanceof Error ? error.message : "Не удалось собрать FX preview.");
     }
   }
 
-  function queueFxPreviewRender() {
-    clearFxPreviewDebounce();
-    fxPreviewDebounceRef.current = window.setTimeout(() => {
-      fxPreviewDebounceRef.current = null;
-      void renderFxPreviewNow();
-    }, FX_PREVIEW_DEBOUNCE_MS);
-  }
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      async importAudioLayerFromFile(file, options) {
-        if (!file.type.startsWith("audio/")) {
-          onError("Можно импортировать только аудиофайл.");
-          return;
-        }
-
-        try {
-          onError("");
-          const durationSec = await getBlobDurationSeconds(file);
-          const url = URL.createObjectURL(file);
-          setLayers((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              kind: "import" as const,
-              name: options?.name?.trim() || file.name || createLayerName(prev.length + 1),
-              blob: file,
-              url,
-              durationSec,
-              muted: false,
-              volume: typeof options?.volume === "number" ? Math.max(0, Math.min(1, options.volume)) : 0.9
-            }
-          ]);
-          setActivePanel("stems");
-        } catch (error) {
-          onError(error instanceof Error ? error.message : "Не удалось импортировать аудиодорожку.");
-        }
-      }
-    }),
-    [onError]
-  );
-
-  useEffect(
-    () => () => {
-      clearFxPreviewDebounce();
-      fxPreviewRenderSeqRef.current += 1;
-      stopTimer();
-      stopStream();
-      stopBackingTracks();
-      stopMetronome();
-      if (meterRafRef.current) {
-        window.cancelAnimationFrame(meterRafRef.current);
-        meterRafRef.current = null;
-      }
-      if (meterCtxRef.current) {
-        meterCtxRef.current.close().catch(() => null);
-        meterCtxRef.current = null;
-      }
-      meterAnalyserRef.current = null;
-      if (mixPreviewUrl) {
-        URL.revokeObjectURL(mixPreviewUrl);
-      }
-      if (fxPreviewUrl) {
-        URL.revokeObjectURL(fxPreviewUrl);
-      }
-      if (stemsPreviewUrl) {
-        URL.revokeObjectURL(stemsPreviewUrl);
-      }
-      if (pendingRecordedTake) {
-        URL.revokeObjectURL(pendingRecordedTake.url);
-      }
-      decodedLayerCacheRef.current.clear();
-      layers.forEach((layer) => URL.revokeObjectURL(layer.url));
-    },
-    [fxPreviewUrl, layers, mixPreviewUrl, pendingRecordedTake, stemsPreviewUrl]
-  );
-
-  useEffect(() => {
-    stopTimer();
-    stopStream();
-    stopBackingTracks();
-    stopMetronome();
-    if (meterRafRef.current) {
-      window.cancelAnimationFrame(meterRafRef.current);
-      meterRafRef.current = null;
-    }
-    if (meterCtxRef.current) {
-      meterCtxRef.current.close().catch(() => null);
-      meterCtxRef.current = null;
-    }
-    meterAnalyserRef.current = null;
-    waveformHistoryRef.current = Array.from({ length: WAVEFORM_SAMPLES }, () => 0.02);
-    waveformPushTsRef.current = 0;
-    waveformLevelTsRef.current = 0;
-    setSignalLevel(0);
-    drawWaveform(false);
-    setRecordingState("idle");
-    setRecordingSeconds(0);
-    setTopPopover(null);
-    setActivePanel("adjust");
-    setAdjustMode("varispeed");
-    setVarispeedPercent(100);
-    setPitchSemitones(0);
-    setInputGainPercent(100);
-    setOutputGainPercent(100);
-    setLoopStartPercent(0);
-    setLoopEndPercent(100);
-    setFxSettingsByLayerId({});
-    setFxAutoPreviewEnabled(true);
-    setSongKeyAutoEnabled(false);
-    setBpmAutoEnabled(false);
-    clearPendingRecordedTake();
-    setFxPreviewStatus("idle");
-    setFxPreviewError("");
-    setStemsPreviewStatus("idle");
+  async function renderStemsPreview() {
+    if (mixing || stemsPreviewStatus === "processing") return;
+    setStemsPreviewStatus("processing");
     setStemsPreviewError("");
-    clearFxPreviewDebounce();
-    fxPreviewRenderSeqRef.current += 1;
-    stemsPreviewRenderSeqRef.current += 1;
-    decodedLayerCacheRef.current.clear();
-    setMixPreviewUrl((prev) => {
-      if (prev) {
-        URL.revokeObjectURL(prev);
-      }
-      return "";
-    });
-    setFxPreviewUrl((prev) => {
-      if (prev) {
-        URL.revokeObjectURL(prev);
-      }
-      return "";
-    });
-    setStemsPreviewUrl((prev) => {
-      if (prev) {
-        URL.revokeObjectURL(prev);
-      }
-      return "";
-    });
-    clearPendingRecordedTake();
-    setLayers((prev) => {
-      prev.forEach((layer) => URL.revokeObjectURL(layer.url));
-      return [];
-    });
-  }, [resetKey]);
-
-  useEffect(() => {
-    if (!lastRecordedLayer || !lastRecordedLayerFxSettings) {
-      resetFxPreviewState();
-      return;
-    }
-    if (!fxAutoPreviewEnabled) {
-      clearFxPreviewDebounce();
-      return;
-    }
-    queueFxPreviewRender();
-    return () => clearFxPreviewDebounce();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bpm, fxAutoPreviewEnabled, lastRecordedLayer, lastRecordedLayerFxSettings, lastTakeAdjustSettings]);
-
-  function stopTimer() {
-    if (timerRef.current) {
-      window.clearInterval(timerRef.current);
-      timerRef.current = null;
+    onError("");
+    try {
+      const { blob } = await renderSessionAudioBlob();
+      const url = URL.createObjectURL(blob);
+      cloneUrlState(setStemsPreviewUrl, url);
+      setStemsPreviewStatus("ready");
+      setTab("mix");
+    } catch (error) {
+      setStemsPreviewStatus("error");
+      setStemsPreviewError(error instanceof Error ? error.message : "Не удалось собрать preview.");
+      onError(error instanceof Error ? error.message : "Не удалось собрать preview.");
     }
   }
 
-  function startTimer() {
-    stopTimer();
+  async function renderMixdown() {
+    if (mixing) return;
+    setMixing(true);
+    onError("");
+    try {
+      const { blob, durationSec } = await renderSessionAudioBlob();
+      const url = URL.createObjectURL(blob);
+      cloneUrlState(setMixPreviewUrl, url);
+      onReady({ blob, durationSec, filename: `multitrack-mix-${Date.now()}.wav` });
+      setTab("mix");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Не удалось сделать render.");
+    } finally {
+      setMixing(false);
+    }
+  }
+
+  const autoDetectFromBlob = useCallback(async (blob: Blob, target: AutoDetectTarget) => {
+    setAutoDetectLoading(target);
+    setAutoDetectError("");
+    try {
+      const result = await analyzeAudioBlobInBrowser(blob);
+      if ((target === "bpm" || target === "both") && result.bpm !== null) {
+        setBpm(clampBpmValue(result.bpm));
+        setBpmAutoEnabled(true);
+      }
+      if ((target === "key" || target === "both") && result.keyRoot && result.keyMode) {
+        setSongKeyRoot(result.keyRoot);
+        setSongKeyMode(result.keyMode);
+        setSongKeyAutoEnabled(true);
+      }
+      if (
+        ((target === "bpm" && result.bpm === null) ||
+          (target === "key" && (!result.keyRoot || !result.keyMode)) ||
+          (target === "both" && result.bpm === null && (!result.keyRoot || !result.keyMode)))
+      ) {
+        setAutoDetectError("Не удалось уверенно определить BPM/тональность. Укажи вручную.");
+      }
+    } catch (error) {
+      setAutoDetectError(error instanceof Error ? error.message : "Ошибка автоанализа.");
+    } finally {
+      setAutoDetectLoading(null);
+    }
+  }, []);
+
+  async function runAutoDetect(target: Exclude<AutoDetectTarget, null>) {
+    const source = selectedLayer?.blob ?? layers[layers.length - 1]?.blob ?? null;
+    if (!source) {
+      setAutoDetectError("Нет аудио для анализа. Загрузи бит или запиши дорожку.");
+      return;
+    }
+    await autoDetectFromBlob(source, target);
+  }
+
+  function commitBpmInput() {
+    const parsed = Number(bpmInputValue);
+    if (!Number.isFinite(parsed)) {
+      setBpmInputValue(String(bpm));
+      return;
+    }
+    const next = clampBpmValue(parsed);
+    setBpm(next);
+    setBpmInputValue(String(next));
+    setBpmAutoEnabled(false);
+  }
+
+  function startRecordingTimer() {
+    clearTimer();
+    recordingSecondsRef.current = 0;
+    setRecordingSeconds(0);
     timerRef.current = window.setInterval(() => {
-      setRecordingSeconds((prev) => prev + 1);
+      recordingSecondsRef.current += 1;
+      setRecordingSeconds(recordingSecondsRef.current);
     }, 1000);
   }
 
-  function stopStream() {
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
+  function pauseRecordingTimer() {
+    clearTimer();
   }
 
-  function stopBackingTracks() {
-    backingAudioRef.current.forEach((audio) => {
-      audio.pause();
-      audio.currentTime = 0;
-    });
-    backingAudioRef.current = [];
-  }
-
-  function drawWaveform(live: boolean) {
-    const canvas = waveformCanvasRef.current;
-    if (!canvas) return;
-
-    const cssWidth = canvas.clientWidth;
-    const cssHeight = canvas.clientHeight;
-    if (!cssWidth || !cssHeight) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(1, Math.round(cssWidth * dpr));
-    const height = Math.max(1, Math.round(cssHeight * dpr));
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-    }
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const centerY = height / 2;
-    const points = waveformHistoryRef.current;
-    const barWidth = width / points.length;
-
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "#171717";
-    ctx.fillRect(0, 0, width, height);
-
-    const gridStep = Math.max(16, Math.floor(width / 14));
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.lineWidth = 1;
-    for (let x = 0; x <= width; x += gridStep) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, height);
-      ctx.stroke();
-    }
-
-    ctx.strokeStyle = "rgba(255,255,255,0.82)";
-    ctx.setLineDash([2, 4]);
-    ctx.beginPath();
-    ctx.moveTo(0, centerY);
-    ctx.lineTo(Math.min(width * 0.2, gridStep * 3), centerY);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    for (let i = 0; i < points.length; i += 1) {
-      const amplitude = Math.max(0.02, Math.min(1, points[i]));
-      const barHeight = Math.max(height * 0.05, amplitude * height * 0.9);
-      const x = i * barWidth;
-      const y = centerY - barHeight / 2;
-
-      const ratio = i / points.length;
-      if (live && amplitude > 0.62 && ratio > 0.74) {
-        ctx.fillStyle = "rgba(255, 79, 79, 0.85)";
-      } else if (ratio > 0.82) {
-        ctx.fillStyle = "rgba(255,255,255,0.75)";
-      } else {
-        ctx.fillStyle = "rgba(255,255,255,0.92)";
-      }
-      ctx.fillRect(x, y, Math.max(1, barWidth * 0.56), barHeight);
-    }
-  }
-
-  function resetWaveform() {
-    waveformHistoryRef.current = Array.from({ length: WAVEFORM_SAMPLES }, () => 0.02);
-    waveformPushTsRef.current = 0;
-    waveformLevelTsRef.current = 0;
-    setSignalLevel(0);
-    drawWaveform(false);
-  }
-
-  function stopSignalMeter(resetWaveformView = true) {
-    if (meterRafRef.current) {
-      window.cancelAnimationFrame(meterRafRef.current);
-      meterRafRef.current = null;
-    }
-    if (meterCtxRef.current) {
-      meterCtxRef.current.close().catch(() => null);
-      meterCtxRef.current = null;
-    }
-    meterAnalyserRef.current = null;
-    if (resetWaveformView) {
-      resetWaveform();
-    } else {
-      drawWaveform(false);
-    }
-  }
-
-  function startSignalMeter(stream: MediaStream) {
-    stopSignalMeter(false);
-    resetWaveform();
-    const audioCtx = new window.AudioContext();
-    const source = audioCtx.createMediaStreamSource(stream);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = 0.88;
-    source.connect(analyser);
-
-    meterCtxRef.current = audioCtx;
-    meterAnalyserRef.current = analyser;
-    const timeData = new Uint8Array(analyser.fftSize);
-
-    const tick = (timestamp: number) => {
-      const currentAnalyser = meterAnalyserRef.current;
-      if (!currentAnalyser) return;
-
-      currentAnalyser.getByteTimeDomainData(timeData);
-      let sum = 0;
-      for (let i = 0; i < timeData.length; i += 1) {
-        const normalized = (timeData[i] - 128) / 128;
-        sum += normalized * normalized;
-      }
-      const rms = Math.sqrt(sum / timeData.length);
-      const amplitude = Math.max(0.02, Math.min(1, rms * 3.2));
-
-      if (timestamp - waveformPushTsRef.current >= 28) {
-        waveformHistoryRef.current = [...waveformHistoryRef.current.slice(1), amplitude];
-        waveformPushTsRef.current = timestamp;
-      }
-      if (timestamp - waveformLevelTsRef.current >= 110) {
-        setSignalLevel(amplitude);
-        waveformLevelTsRef.current = timestamp;
-      }
-
-      drawWaveform(true);
-      meterRafRef.current = window.requestAnimationFrame(tick);
-    };
-
-    drawWaveform(true);
-    meterRafRef.current = window.requestAnimationFrame(tick);
-  }
-
-  function clickMetronome(audioCtx: AudioContext, accent: boolean) {
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.frequency.value = accent ? 1560 : 1120;
-    gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(accent ? 0.22 : 0.15, audioCtx.currentTime + 0.003);
-    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.05);
-    osc.connect(gain).connect(audioCtx.destination);
-    osc.start();
-    osc.stop(audioCtx.currentTime + 0.06);
-  }
-
-  function stopMetronome() {
-    if (metronomeTickRef.current) {
-      window.clearInterval(metronomeTickRef.current);
-      metronomeTickRef.current = null;
-    }
-    if (metronomeCtxRef.current) {
-      metronomeCtxRef.current.close().catch(() => null);
-      metronomeCtxRef.current = null;
-    }
-  }
-
-  function startMetronome() {
-    if (!metronomeEnabled) return;
-    stopMetronome();
-
-    const audioCtx = new window.AudioContext();
-    metronomeCtxRef.current = audioCtx;
-    let beat = 0;
-    clickMetronome(audioCtx, true);
-    metronomeTickRef.current = window.setInterval(() => {
-      beat = (beat + 1) % 4;
-      clickMetronome(audioCtx, beat === 0);
-    }, Math.max(120, Math.round(60000 / bpm)));
-  }
-
-  function startBackingTracks() {
-    stopBackingTracks();
-    const audios: HTMLAudioElement[] = [];
-    layers
-      .filter((layer) => !layer.muted)
-      .forEach((layer) => {
-        const audio = new Audio(layer.url);
-        audio.volume = layer.volume;
-        audio.currentTime = 0;
-        audios.push(audio);
-      });
-    backingAudioRef.current = audios;
-    backingAudioRef.current.forEach((audio) => {
-      audio.play().catch(() => null);
-    });
-  }
-
-  function pauseBackingTracks() {
-    backingAudioRef.current.forEach((audio) => audio.pause());
-  }
-
-  function resumeBackingTracks() {
-    backingAudioRef.current.forEach((audio) => {
-      audio.play().catch(() => null);
-    });
-  }
-
-  function stopAll() {
-    stopTimer();
-    stopStream();
-    stopBackingTracks();
-    stopMetronome();
-    stopSignalMeter(false);
-  }
-
-  function resetRecorderSession() {
-    stopAll();
-    resetFxPreviewState();
-    resetStemsPreviewState();
-    decodedLayerCacheRef.current.clear();
-    setRecordingState("idle");
-    setRecordingSeconds(0);
-    setTopPopover(null);
-    setActivePanel("adjust");
-    setAdjustMode("varispeed");
-    setVarispeedPercent(100);
-    setPitchSemitones(0);
-    setInputGainPercent(100);
-    setOutputGainPercent(100);
-    setLoopStartPercent(0);
-    setLoopEndPercent(100);
-    setFxSettingsByLayerId({});
-    setFxAutoPreviewEnabled(true);
-    setSongKeyAutoEnabled(false);
-    setBpmAutoEnabled(false);
-    clearPendingRecordedTake();
-    setLayers((prev) => {
-      prev.forEach((layer) => URL.revokeObjectURL(layer.url));
-      return [];
-    });
-    setMixPreviewUrl((prev) => {
-      if (prev) {
-        URL.revokeObjectURL(prev);
-      }
-      return "";
-    });
-    resetWaveform();
-    onError("");
-    onReset?.();
+  function resumeRecordingTimer() {
+    clearTimer();
+    timerRef.current = window.setInterval(() => {
+      recordingSecondsRef.current += 1;
+      setRecordingSeconds(recordingSecondsRef.current);
+    }, 1000);
   }
 
   async function startRecording() {
+    if (recordingState !== "idle") return;
+    onError("");
     try {
-      onError("");
+      discardRecordingOnStopRef.current = false;
+      setMetronomePreviewPlaying(false);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
+      startRecordWaveMonitor(stream);
       const recorder = new MediaRecorder(stream);
       recorderRef.current = recorder;
       chunksRef.current = [];
-      setRecordingSeconds(0);
 
       recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunksRef.current.push(event.data);
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+
+      recorder.onstop = async () => {
+        try {
+          const shouldDiscard = discardRecordingOnStopRef.current;
+          discardRecordingOnStopRef.current = false;
+          if (shouldDiscard) {
+            chunksRef.current = [];
+            recordingSecondsRef.current = 0;
+            setRecordingSeconds(0);
+            return;
+          }
+          const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+          const url = URL.createObjectURL(blob);
+          const nextLayerId = crypto.randomUUID();
+          const nextDuration = Math.max(recordingSecondsRef.current, await getBlobDurationSeconds(blob));
+          const armedName = armedTrackTemplate?.name?.trim();
+          const layer: Layer = {
+            id: nextLayerId,
+            kind: "recording",
+            name: armedName || createLayerName(layersRef.current.length + 1),
+            role: armedTrackTemplate?.role ?? null,
+            blob,
+            url,
+            durationSec: nextDuration,
+            muted: false,
+            volume: 0.9,
+            pan: 0
+          };
+          setLayers((prev) => [...prev, layer]);
+          setSelectedLayerId(nextLayerId);
+          setFxSettingsByLayerId((prev) => ({ ...prev, [nextLayerId]: createDefaultFxChainSettings() }));
+          setTab("tracks");
+        } finally {
+          stopStream();
+          stopAllPlaybackHelpers();
+          setRecordingState("idle");
         }
       };
 
-      recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
-        const url = URL.createObjectURL(blob);
-        const nextLayerId = crypto.randomUUID();
-        setPendingRecordedTake({
-          id: nextLayerId,
-          name: createLayerName(layers.length + 1),
-          blob,
-          url,
-          durationSec: recordingSeconds
-        });
-        setRecordingState("stopped");
-        stopAll();
-      };
-
-      if (activeLayerCount > 0) {
+      if (layersRef.current.some((layer) => !layer.muted)) {
         startBackingTracks();
       }
       startMetronome();
+      startRecordingTimer();
       recorder.start();
       setRecordingState("recording");
-      startSignalMeter(stream);
-      startTimer();
     } catch (error) {
       onError(error instanceof Error ? error.message : "Не удалось получить доступ к микрофону.");
-      stopAll();
+      stopStream();
+      stopAllPlaybackHelpers();
+      setRecordingState("idle");
     }
   }
 
   function pauseRecording() {
     if (!recorderRef.current || recordingState !== "recording") return;
     recorderRef.current.pause();
-    setRecordingState("paused");
-    stopTimer();
+    pauseRecordingTimer();
+    pauseRecordWaveMonitor();
     pauseBackingTracks();
     stopMetronome();
-    stopSignalMeter(false);
+    setRecordingState("paused");
   }
 
   function resumeRecording() {
     if (!recorderRef.current || recordingState !== "paused") return;
+    setMetronomePreviewPlaying(false);
     recorderRef.current.resume();
-    setRecordingState("recording");
-    startTimer();
+    resumeRecordingTimer();
+    resumeRecordWaveMonitor();
     resumeBackingTracks();
     startMetronome();
-    if (streamRef.current) {
-      startSignalMeter(streamRef.current);
-    }
+    setRecordingState("recording");
   }
 
   function stopRecording() {
-    if (!recorderRef.current || (recordingState !== "recording" && recordingState !== "paused")) return;
-    recorderRef.current.stop();
+    if (!recorderRef.current) return;
+    if (recordingState !== "recording" && recordingState !== "paused") return;
+    discardRecordingOnStopRef.current = false;
+    try {
+      recorderRef.current.stop();
+    } catch {}
+    clearTimer();
+    setRecordingState("idle");
   }
 
-  function handlePrimaryAction() {
-    if (canPause) {
-      pauseRecording();
-      return;
-    }
-    if (canResume) {
-      resumeRecording();
-      return;
-    }
-    if (canStart) {
-      startRecording();
-    }
+  function deleteCurrentTake() {
+    if (!recorderRef.current || recordingState !== "paused") return;
+    setMetronomePreviewPlaying(false);
+    discardRecordingOnStopRef.current = true;
+    try {
+      recorderRef.current.stop();
+    } catch {}
+    clearTimer();
+    setRecordingState("idle");
   }
 
   function removeLayer(layerId: string) {
@@ -1408,909 +1199,864 @@ export const MultiTrackRecorder = forwardRef<MultiTrackRecorderHandle, MultiTrac
       delete next[layerId];
       return next;
     });
-    if (lastRecordedLayer?.id === layerId) {
-      resetFxPreviewState();
-      resetStemsPreviewState();
-    }
+    if (selectedLayerId === layerId) setSelectedLayerId(null);
     setLayers((prev) => {
-      const target = prev.find((layer) => layer.id === layerId);
-      if (target) {
-        URL.revokeObjectURL(target.url);
-      }
-      return prev
-        .filter((layer) => layer.id !== layerId)
-        .map((layer, index) => ({ ...layer, name: createLayerName(index + 1) }));
+      const found = prev.find((layer) => layer.id === layerId);
+      if (found) URL.revokeObjectURL(found.url);
+      return prev.filter((layer) => layer.id !== layerId);
     });
   }
 
-  async function renderMixdown() {
-    setMixing(true);
+  const importAudioLayerFromFile = useCallback(async (
+    file: File,
+    options?: { name?: string; volume?: number; pan?: number; role?: RecorderTrackRole | null; autoDetectTempoKey?: boolean }
+  ) => {
+    if (!file.type.startsWith("audio/")) {
+      onError("Можно импортировать только аудиофайл.");
+      return;
+    }
     onError("");
     try {
-      const { blob: mixBlob, durationSec: mixDuration } = await renderSessionAudioBlob();
-      if (mixPreviewUrl) {
-        URL.revokeObjectURL(mixPreviewUrl);
-      }
-      const previewUrl = URL.createObjectURL(mixBlob);
-      setMixPreviewUrl(previewUrl);
-      onReady({
-        blob: mixBlob,
-        durationSec: mixDuration,
-        filename: `multitrack-mix-${Date.now()}.wav`
-      });
-
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Не удалось свести дорожки.");
-    } finally {
-      setMixing(false);
-    }
-  }
-
-  async function renderStemsPreview() {
-    if (stemsPreviewStatus === "processing" || mixing) return;
-    setStemsPreviewStatus("processing");
-    setStemsPreviewError("");
-    const renderSeq = ++stemsPreviewRenderSeqRef.current;
-    try {
-      const { blob } = await renderSessionAudioBlob();
-      const nextUrl = URL.createObjectURL(blob);
-      if (renderSeq !== stemsPreviewRenderSeqRef.current) {
-        URL.revokeObjectURL(nextUrl);
-        return;
-      }
-      setStemsPreviewUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return nextUrl;
-      });
-      setStemsPreviewStatus("ready");
-      setStemsPreviewError("");
-    } catch (error) {
-      if (renderSeq !== stemsPreviewRenderSeqRef.current) return;
-      clearStemsPreviewUrl();
-      setStemsPreviewStatus("error");
-      setStemsPreviewError(error instanceof Error ? error.message : "Не удалось собрать preview дорожек.");
-    }
-  }
-
-  function handleBpmInputChange(rawValue: string) {
-    setBpmInputValue(rawValue);
-    if (rawValue.trim() === "") return;
-    const parsed = Number(rawValue);
-    if (!Number.isFinite(parsed)) return;
-    if (parsed < 40 || parsed > 240) return;
-    setBpm(Math.round(parsed));
-  }
-
-  function commitBpmInput() {
-    if (bpmInputValue.trim() === "") {
-      setBpmInputValue(String(bpm));
-      return;
-    }
-    const parsed = Number(bpmInputValue);
-    if (!Number.isFinite(parsed)) {
-      setBpmInputValue(String(bpm));
-      return;
-    }
-    const next = clampBpmValue(parsed);
-    setBpm(next);
-    setBpmInputValue(String(next));
-  }
-
-  function toggleTopPopover(next: Exclude<TopPopover, null>) {
-    setTopPopover((prev) => (prev === next ? null : next));
-  }
-
-  function closeTopPopover() {
-    setTopPopover(null);
-  }
-
-  function selectSongKey(root: string) {
-    setSongKeyRoot(root);
-    setSongKeyAutoEnabled(false);
-  }
-
-  function clearSongKeySelection() {
-    setSongKeyRoot(null);
-    setSongKeyAutoEnabled(false);
-  }
-
-  function toggleSongKeyAuto() {
-    setSongKeyAutoEnabled((prev) => !prev);
-  }
-
-  function setSongKeyModeAndDisableAuto(nextMode: TonalMode) {
-    setSongKeyMode(nextMode);
-    setSongKeyAutoEnabled(false);
-  }
-
-  function applyBpmValue(nextValue: number) {
-    const next = clampBpmValue(nextValue);
-    setBpm(next);
-    setBpmInputValue(String(next));
-    setBpmAutoEnabled(false);
-  }
-
-  function applyBpmDelta(delta: number) {
-    applyBpmValue(bpm + delta);
-  }
-
-  function clearBpmSelection() {
-    applyBpmValue(90);
-  }
-
-  function toggleBpmAuto() {
-    setBpmAutoEnabled((prev) => !prev);
-  }
-
-  async function runAutoDetect(target: Exclude<TopPopover, null>) {
-    const sourceBlob =
-      pendingRecordedTake?.blob ?? [...layers].reverse().find((layer) => layer.kind === "import" || layer.kind === "recording")?.blob ?? null;
-
-    if (!sourceBlob) {
-      setAutoAnalysisError("Нет аудио для анализа. Загрузите файл или запишите дубль.");
-      return;
-    }
-
-    setAutoAnalysisLoading(target);
-    setAutoAnalysisError("");
-    try {
-      const result = await analyzeAudioBlobInBrowser(sourceBlob);
-      if (target === "key") {
-        if (result.keyRoot && result.keyMode) {
-          setSongKeyRoot(result.keyRoot);
-          setSongKeyMode(result.keyMode);
-          setSongKeyAutoEnabled(true);
-        } else {
-          setAutoAnalysisError("Не удалось уверенно определить тональность.");
-        }
-      }
-      if (target === "bpm") {
-        if (result.bpm !== null) {
-          applyBpmValue(result.bpm);
-          setBpmAutoEnabled(true);
-        } else {
-          setAutoAnalysisError("Не удалось определить BPM.");
-        }
+      const durationSec = await getBlobDurationSeconds(file);
+      const layerId = crypto.randomUUID();
+      const url = URL.createObjectURL(file);
+      const layer: Layer = {
+        id: layerId,
+        kind: "import",
+        name: options?.name?.trim() || file.name || createLayerName(layersRef.current.length + 1),
+        role: options?.role ?? null,
+        blob: file,
+        url,
+        durationSec,
+        muted: false,
+        volume: typeof options?.volume === "number" ? clamp(options.volume, 0, 1) : 0.9,
+        pan: clampPanValue(options?.pan ?? 0)
+      };
+      setLayers((prev) => [...prev, layer]);
+      setSelectedLayerId(layerId);
+      setTab("tracks");
+      if (options?.autoDetectTempoKey) {
+        void autoDetectFromBlob(file, "both");
       }
     } catch (error) {
-      setAutoAnalysisError(error instanceof Error ? error.message : "Ошибка анализа аудио.");
-    } finally {
-      setAutoAnalysisLoading(null);
+      onError(error instanceof Error ? error.message : "Не удалось импортировать аудиодорожку.");
     }
+  }, [autoDetectFromBlob, onError]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      importAudioLayerFromFile
+    }),
+    [importAudioLayerFromFile]
+  );
+
+  const canRecord = recordingState === "idle";
+  const canPause = recordingState === "recording";
+  const canResume = recordingState === "paused";
+  const canStop = recordingState === "recording" || recordingState === "paused";
+  const canPreviewMetronome = recordingState === "idle";
+  const hasRecordedChunkInCurrentTake = canStop && recordingSeconds > 0;
+  const showSaveOnStopButton = recordingState === "paused" && recordingSeconds > 0;
+  const primaryRecordButtonLabel = recordingState === "idle" ? "Record" : "Resume";
+  const canPrimaryRecordButton = canRecord || canResume;
+  const activeLayerCount = layers.filter((layer) => !layer.muted).length;
+
+  function toggleMetronomePreview() {
+    if (!canPreviewMetronome) return;
+    if (metronomePreviewPlaying) {
+      stopMetronome();
+      setMetronomePreviewPlaying(false);
+      return;
+    }
+    startMetronome(true);
+    setMetronomePreviewPlaying(true);
   }
 
+  useEffect(() => {
+    if (!metronomePreviewPlaying || !canPreviewMetronome) return;
+    startMetronome(true);
+    setMetronomePreviewPlaying(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bpm]);
   return (
-    <div className="relative space-y-4 overflow-hidden rounded-[40px] border border-white/10 bg-[radial-gradient(circle_at_30%_-10%,rgba(255,255,255,0.1),transparent_45%),linear-gradient(180deg,#1f2024_0%,#17181b_65%,#141518_100%)] p-4 text-white shadow-[0_28px_70px_rgba(0,0,0,0.42)]">
-      <div className="relative rounded-[30px] border border-white/5 bg-transparent px-2 pb-1 pt-5">
-        <div className="space-y-1 px-2 pt-1 text-center">
-          <p className="text-2xl font-medium tracking-tight text-white sm:text-[2.05rem]">{recorderTitle}</p>
-          <p className="text-lg leading-tight text-white/60">{recorderSubtitle}</p>
-          <div className="flex flex-wrap justify-center gap-2 pt-2">
-            <button
-              type="button"
-              onClick={() => toggleTopPopover("key")}
-              className="rounded-xl border border-white/5 bg-white/10 px-3 py-1.5 font-mono text-sm text-white/90 hover:bg-white/15"
-              aria-expanded={topPopover === "key"}
-            >
-              {keyChipLabel}
-            </button>
-            <button
-              type="button"
-              onClick={() => toggleTopPopover("bpm")}
-              className="rounded-xl border border-white/5 bg-white/10 px-3 py-1.5 font-mono text-sm text-white/90 hover:bg-white/15"
-              aria-expanded={topPopover === "bpm"}
-            >
-              {bpm} BPM
-            </button>
+    <div className="space-y-4 rounded-3xl border border-brand-border bg-white/85 p-4 shadow-[0_18px_45px_rgba(61,84,46,0.08)]">
+      <div className="rounded-2xl border border-brand-border bg-gradient-to-br from-[#f8fbf3] to-[#edf4e6] p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-muted">Multitrack Recorder</p>
+            <h3 className="text-xl font-semibold tracking-tight text-brand-ink">Demo Session</h3>
+            <p className="mt-1 text-sm text-brand-muted">
+              Пошаговая запись дорожек, FX, панорама, preview и финальный render под ваш demo flow.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" className="border-brand-border bg-white" onClick={() => resetRecorderSession()}>
+              Очистить рекордер
+            </Button>
           </div>
         </div>
 
-        {topPopover && (
-          <>
-            <button
-              type="button"
-              aria-label="Close picker"
-              onClick={closeTopPopover}
-              className="absolute inset-0 z-10 cursor-default rounded-[30px] bg-transparent"
-            />
-            <div className="absolute inset-x-3 top-[8.8rem] z-20">
-              <div className="relative rounded-[24px] border border-white/10 bg-[#202125]/95 p-4 shadow-[0_24px_50px_rgba(0,0,0,0.45)] backdrop-blur">
-                <div className="pointer-events-none absolute left-1/2 top-0 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[4px] border-l border-t border-white/10 bg-[#202125]/95" />
-
-                {topPopover === "key" ? (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-5 gap-3">
-                      {ENHARMONIC_KEY_COLUMNS.map((col) => (
-                        <div key={`${col.sharp}-${col.flat}`} className="space-y-2">
-                          <button
-                            type="button"
-                            onClick={() => selectSongKey(col.sharp)}
-                            className={`flex h-16 w-full items-center justify-center rounded-xl border text-2xl font-semibold ${
-                              songKeyRoot === col.sharp
-                                ? "border-white bg-white/10 text-white"
-                                : "border-white/10 bg-[#1a1b1f] text-white/85 hover:bg-white/5"
-                            }`}
-                          >
-                            {col.sharp}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => selectSongKey(col.flat)}
-                            className={`flex h-16 w-full items-center justify-center rounded-xl border text-2xl font-semibold ${
-                              songKeyRoot === col.flat
-                                ? "border-white bg-white/10 text-white"
-                                : "border-white/10 bg-[#1a1b1f] text-white/85 hover:bg-white/5"
-                            }`}
-                          >
-                            {col.flat}
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="grid grid-cols-7 gap-2">
-                      {NATURAL_KEYS.map((note) => (
-                        <button
-                          key={note}
-                          type="button"
-                          onClick={() => selectSongKey(note)}
-                          className={`h-14 rounded-xl border text-xl font-semibold ${
-                            songKeyRoot === note
-                              ? "border-white bg-white/10 text-white"
-                              : "border-white/10 bg-[#1a1b1f] text-white/85 hover:bg-white/5"
-                          }`}
-                        >
-                          {note}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setSongKeyModeAndDisableAuto("minor")}
-                        className={`h-16 rounded-2xl border text-2xl font-semibold ${
-                          songKeyMode === "minor"
-                            ? "border-white bg-white/10 text-white"
-                            : "border-white/10 bg-[#1a1b1f] text-white/75"
-                        }`}
-                      >
-                        Minor
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSongKeyModeAndDisableAuto("major")}
-                        className={`h-16 rounded-2xl border text-2xl font-semibold ${
-                          songKeyMode === "major"
-                            ? "border-white bg-white/10 text-white"
-                            : "border-white/10 bg-[#1a1b1f] text-white/75"
-                        }`}
-                      >
-                        Major
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-1">
-                      <button
-                        type="button"
-                        onClick={() => void runAutoDetect("key")}
-                        disabled={autoAnalysisLoading !== null}
-                        className={`text-xl font-semibold ${
-                          songKeyAutoEnabled ? "text-white" : "text-white/35 hover:text-white/70"
-                        } disabled:opacity-50`}
-                      >
-                        {autoAnalysisLoading === "key" ? "Auto..." : "Auto"}
-                      </button>
-                      <button type="button" onClick={clearSongKeySelection} className="text-xl font-semibold text-white hover:text-[#ffe900]">
-                        Clear
-                      </button>
-                    </div>
-                    {autoAnalysisError && <p className="text-sm text-red-300">{autoAnalysisError}</p>}
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => applyBpmDelta(-1)}
-                        className="h-16 rounded-2xl border border-white/10 bg-[#1a1b1f] text-3xl font-semibold text-white hover:bg-white/5"
-                      >
-                        -
-                      </button>
-                      <div className="flex h-16 min-w-[11rem] items-center justify-center rounded-2xl border-2 border-white bg-[#202125] px-4 text-2xl font-semibold text-white">
-                        {bpm} BPM
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => applyBpmDelta(1)}
-                        className="h-16 rounded-2xl border border-white/10 bg-[#1a1b1f] text-3xl font-semibold text-white hover:bg-white/5"
-                      >
-                        +
-                      </button>
-                    </div>
-
-                    <div className="relative h-16 rounded-xl bg-transparent">
-                      <div className="pointer-events-none absolute inset-x-2 top-1/2 -translate-y-1/2">
-                        <div className="flex items-center justify-between">
-                          {Array.from({ length: 33 }).map((_, index) => (
-                            <span
-                              key={index}
-                              className={`w-px rounded-full ${index % 8 === 0 ? "h-10 bg-white/40" : "h-7 bg-white/25"}`}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                      <div
-                        className="pointer-events-none absolute top-1/2 h-12 w-[3px] -translate-y-1/2 rounded-full bg-white"
-                        style={{ left: `calc(${((bpm - 40) / 200) * 100}% - 1.5px)` }}
-                      />
-                      <input
-                        type="range"
-                        min={40}
-                        max={240}
-                        value={bpm}
-                        onChange={(event) => applyBpmValue(Number(event.target.value))}
-                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                        aria-label="BPM picker"
-                      />
-                    </div>
-
-                    <div className="flex items-center justify-between pt-1">
-                      <button
-                        type="button"
-                        onClick={() => void runAutoDetect("bpm")}
-                        disabled={autoAnalysisLoading !== null}
-                        className={`text-xl font-semibold ${bpmAutoEnabled ? "text-white" : "text-white/35 hover:text-white/70"} disabled:opacity-50`}
-                      >
-                        {autoAnalysisLoading === "bpm" ? "Auto..." : "Auto"}
-                      </button>
-                      <button type="button" onClick={clearBpmSelection} className="text-xl font-semibold text-white hover:text-[#ffe900]">
-                        Clear
-                      </button>
-                    </div>
-                    {autoAnalysisError && <p className="text-sm text-red-300">{autoAnalysisError}</p>}
-                  </div>
-                )}
-              </div>
-            </div>
-          </>
-        )}
-
-        <div className="mt-4 rounded-[24px] border border-white/5 bg-transparent p-3">
-          <div className="relative overflow-hidden rounded-[16px] border border-white/5 bg-[#171717] p-3">
-            <canvas ref={waveformCanvasRef} className="relative h-44 w-full sm:h-52" />
-            {showMultitrackLaneOverlay && (
-              <>
-                <div className="pointer-events-none absolute inset-x-3 bottom-3 h-[36%] bg-[#4a171d]/55" />
-                <div className="pointer-events-none absolute bottom-[18%] left-[28%] right-3 border-t-2 border-dotted border-red-500/90" />
-              </>
-            )}
-            <div
-              className="pointer-events-none absolute bottom-3 top-3 w-[3px] rounded bg-[#ffe900] shadow-[0_0_10px_rgba(255,233,0,0.4)]"
-              style={{ left: `calc(${Math.max(2, Math.min(98, playheadPercent))}% - 1.5px)` }}
-            />
-            {recordingState === "recording" && (
-              <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-1 rounded-full border border-red-400/30 bg-black/50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-red-300">
-                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
-                REC
-              </div>
-            )}
-          </div>
-
-          <p className="mt-4 text-center font-mono text-2xl tracking-wide text-white/90">
-            {formatDuration(recordingSeconds)} / {formatDuration(displayedTotalDuration)}
-          </p>
-
-          {!showPendingTakeReview ? (
-            <>
-              <div className="mt-5 grid grid-cols-3 items-center gap-3">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="h-14 rounded-2xl border-white/10 bg-white/5 text-base font-medium text-white hover:bg-white/10"
-                  onClick={resetRecorderSession}
-                >
-                  New take
-                </Button>
-                <Button
-                  type="button"
-                  className="h-14 rounded-2xl bg-[#ffe900] text-base font-semibold text-black hover:bg-[#fff04a]"
-                  onClick={handlePrimaryAction}
-                >
-                  {primaryActionLabel}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="h-14 rounded-2xl border-white/10 bg-white/5 text-base font-medium text-white hover:bg-white/10 disabled:opacity-40"
-                  disabled={!canStop}
-                  onClick={stopRecording}
-                >
-                  Save
-                </Button>
-              </div>
-
-              <p className="mt-3 text-center text-xs text-white/45">{statusHint}</p>
-            </>
-          ) : (
-            <div className="mt-6 h-10" />
-          )}
-        </div>
-
-        {showPendingTakeReview && (
-          <div className="mt-10 flex min-h-[22rem] items-end px-2">
-            <div className="grid w-full grid-cols-2 gap-4">
-              <button
+        <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-3">
+          <div className="rounded-xl border border-brand-border bg-white p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs uppercase tracking-[0.14em] text-brand-muted">BPM</p>
+              <Button
                 type="button"
-                onClick={discardPendingRecordedTake}
-                className="h-16 rounded-2xl border border-white/5 bg-white/5 text-2xl font-semibold text-white/90 hover:bg-white/10"
+                variant="secondary"
+                className={`h-8 rounded-lg px-2 text-xs ${
+                  bpmAutoEnabled
+                    ? "border-[#c4d8c0] bg-[#eef7ea] text-[#315f3b] hover:bg-[#e7f3e2]"
+                    : "border-brand-border bg-white text-brand-muted hover:bg-[#f7faf2]"
+                }`}
+                onClick={() => void runAutoDetect("bpm")}
+                disabled={autoDetectLoading !== null}
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={commitPendingRecordedTake}
-                className="h-16 rounded-2xl bg-[#ff4044] text-2xl font-semibold text-white hover:bg-[#ff5357]"
-              >
-                Done
-              </button>
+                {autoDetectLoading === "bpm" || autoDetectLoading === "both" ? "Auto..." : bpmAutoEnabled ? "Auto ✓" : "Auto"}
+              </Button>
             </div>
-          </div>
-        )}
-
-        {!showPendingTakeReview && lastRecordedLayer && recordingState !== "recording" && (
-          <div className="mt-3 rounded-[18px] border border-white/5 bg-[#1a1b1f] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/45">Last Take Preview</p>
-                <p className="text-sm text-white/45">
-                  Прослушай только последний записанный дубль, чтобы решить, оставлять его или перезаписать.
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="rounded-lg border border-white/5 bg-[#141519] px-2.5 py-1 text-xs font-semibold text-white/80">
-                  {lastTakePreviewBadge}
-                </span>
-                <span className="rounded-lg border border-white/5 bg-[#141519] px-2.5 py-1 text-xs font-semibold text-white/70">
-                  {formatDuration(lastRecordedLayer.durationSec)}
-                </span>
-              </div>
-            </div>
-            {fxPreviewStatus === "processing" && lastTakeNeedsProcessedPreview && (
-              <p className="mb-2 text-xs text-white/45">Processing preview...</p>
-            )}
-            {fxPreviewStatus === "error" && fxPreviewError && (
-              <p className="mb-2 text-xs text-[#a4372a]">Preview render error, dry fallback: {fxPreviewError}</p>
-            )}
-            <AudioWaveformPlayer src={lastTakePreviewSrc} barCount={96} loopRangePercent={loopPreviewRange} />
-          </div>
-        )}
-
-          <div className={`mt-4 rounded-[22px] border border-white/5 bg-[#1b1c20]/95 p-2 ${showPendingTakeReview ? "hidden" : ""}`}>
             <div className="flex items-center gap-2">
-              {([
-                { id: "adjust", label: "Adjust" },
-                { id: "stems", label: "Stems" },
-                { id: "fx", label: "EQ" }
-              ] as const).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setActivePanel(tab.id)}
-                  className={`rounded-2xl px-6 py-3 text-base font-semibold transition-colors ${
-                    activePanel === tab.id
-                      ? "bg-[#26282d] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
-                      : "bg-transparent text-white/55 hover:text-white/85"
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
+              <Input
+                type="number"
+                min={40}
+                max={240}
+                value={bpmInputValue}
+                onChange={(event) => setBpmInputValue(event.target.value)}
+                onBlur={commitBpmInput}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
+                className="h-10 min-w-0 flex-1"
+              />
+              <Button variant="secondary" className="h-10 shrink-0 px-3" onClick={() => { setBpm(clampBpmValue(bpm - 1)); setBpmAutoEnabled(false); }}>
+                -
+              </Button>
+              <Button variant="secondary" className="h-10 shrink-0 px-3" onClick={() => { setBpm(clampBpmValue(bpm + 1)); setBpmAutoEnabled(false); }}>
+                +
+              </Button>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
               <button
                 type="button"
-                aria-label={recordingState === "recording" ? "Pause recording" : "Start recording"}
-                onClick={handlePrimaryAction}
-                className="ml-auto flex h-14 w-16 items-center justify-center rounded-2xl border border-white/5 bg-[#141519] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                onClick={() => setMetronomeEnabled((prev) => !prev)}
+                className={`h-10 w-full rounded-xl border px-2 py-2 text-[11px] font-semibold leading-tight sm:text-xs ${
+                  metronomeEnabled ? "border-[#7ca27f] bg-[#eef7ea] text-[#315f3b]" : "border-brand-border bg-white text-brand-muted"
+                }`}
               >
-                <span className={`block h-6 w-6 ${recordingState === "recording" ? "rounded-sm bg-red-500" : "rounded-full bg-red-500"}`} />
+                {metronomeEnabled ? "METRO: ON" : "METRO: OFF"}
               </button>
+              <Button
+                type="button"
+                variant={metronomePreviewPlaying ? "primary" : "secondary"}
+                className={
+                  metronomePreviewPlaying
+                    ? "h-10 w-full bg-[#6f9f7b] text-white hover:bg-[#5f8f6c]"
+                    : "h-10 w-full border-brand-border bg-white"
+                }
+                onClick={toggleMetronomePreview}
+                disabled={!canPreviewMetronome}
+              >
+                {metronomePreviewPlaying ? "STOP" : "PLAY"}
+              </Button>
             </div>
           </div>
 
-          <div className={`mt-3 rounded-[22px] border border-white/5 bg-[#222327] p-3 ${showPendingTakeReview ? "hidden" : ""}`}>
-            {activePanel === "adjust" && (
-              <div className="space-y-3">
-                <div className="rounded-2xl border border-white/5 bg-[#1a1b1f] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="flex rounded-xl border border-white/5 bg-[#101114] p-1">
-                      <button
-                        type="button"
-                        onClick={() => setAdjustMode("varispeed")}
-                        className={`rounded-lg px-3 py-2 text-xs font-semibold tracking-[0.08em] ${
-                          adjustMode === "varispeed"
-                            ? "bg-[#ffe900] text-black shadow-sm"
-                            : "text-white/50 hover:text-white"
-                        }`}
-                      >
-                        VARISPEED
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAdjustMode("gain")}
-                        className={`rounded-lg px-3 py-2 text-xs font-semibold tracking-[0.08em] ${
-                          adjustMode === "gain"
-                            ? "bg-[#ffe900] text-black shadow-sm"
-                            : "text-white/50 hover:text-white"
-                        }`}
-                      >
-                        GAIN
-                      </button>
-                    </div>
-
-                    <div className="ml-auto flex flex-wrap items-center gap-2">
-                      <div className="flex items-center gap-2 rounded-xl border border-white/5 bg-[#101114] px-2 py-1.5">
-                        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/45">BPM</span>
-                        <Input
-                          type="number"
-                          min={40}
-                          max={240}
-                          value={bpmInputValue}
-                          onChange={(event) => handleBpmInputChange(event.target.value)}
-                          onBlur={commitBpmInput}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.currentTarget.blur();
-                            }
-                          }}
-                          className="h-8 w-20 rounded-lg border-white/10 bg-[#222327] px-2 text-center text-sm text-white"
-                        />
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setMetronomeEnabled((prev) => !prev)}
-                        className={`rounded-xl border px-3 py-2 text-xs font-semibold tracking-[0.08em] ${
-                          metronomeEnabled
-                            ? "border-[#ffe900]/40 bg-[#ffe900] text-black"
-                            : "border-white/10 bg-[#141519] text-white/55"
-                        }`}
-                      >
-                        {metronomeEnabled ? "METRO ON" : "METRO OFF"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-white/5 bg-[#1a1b1f] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-                  <div className="mb-3 flex items-center justify-between px-1">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/45">Adjust</p>
-                      <p className="text-sm text-white/45">
-                        {adjustMode === "varispeed"
-                          ? "Темп и тональность для удобной записи и поиска кармана."
-                          : "Визуальные gain-контролы для предварительной настройки сессии."}
-                      </p>
-                    </div>
-                    <div className="rounded-xl border border-white/5 bg-[#101114] px-3 py-2 text-right">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/45">Input</p>
-                      <p className="font-mono text-sm font-semibold text-white/85">{Math.round(signalLevel * 100)}%</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    {adjustMode === "varispeed" ? (
-                      <>
-                        <AdjustRailSlider
-                          label="Speed"
-                          min={50}
-                          max={150}
-                          value={varispeedPercent}
-                          valueLabel={`${varispeedPercent}%`}
-                          centerValue={100}
-                          onChange={setVarispeedPercent}
-                        />
-                        <AdjustRailSlider
-                          label="Pitch"
-                          min={-12}
-                          max={12}
-                          value={pitchSemitones}
-                          valueLabel={`${pitchSemitones > 0 ? "+" : ""}${pitchSemitones} st`}
-                          centerValue={0}
-                          onChange={setPitchSemitones}
-                        />
-                      </>
-                    ) : (
-                      <>
-                        <AdjustRailSlider
-                          label="Input"
-                          min={0}
-                          max={200}
-                          value={inputGainPercent}
-                          valueLabel={`${inputGainPercent}%`}
-                          centerValue={100}
-                          onChange={setInputGainPercent}
-                        />
-                        <AdjustRailSlider
-                          label="Output"
-                          min={0}
-                          max={200}
-                          value={outputGainPercent}
-                          valueLabel={`${outputGainPercent}%`}
-                          centerValue={100}
-                          onChange={setOutputGainPercent}
-                        />
-                      </>
-                    )}
-                  </div>
-
-                  <div className="mt-4 rounded-2xl border border-white/5 bg-[#141519] p-3">
-                    <div className="mb-2 flex items-center justify-between text-xs font-medium uppercase tracking-wider text-white/50">
-                      <span>Loop Window</span>
-                      <span>
-                        {loopStartPercent}% - {loopEndPercent}%
-                      </span>
-                    </div>
-
-                    <div className="relative h-14 rounded-xl border border-white/5 bg-[#101114]">
-                      <div className="pointer-events-none absolute inset-x-3 top-1/2 h-px -translate-y-1/2 border-t border-dotted border-white/20" />
-                      <div className="pointer-events-none absolute inset-y-0 left-3 right-3">
-                        <div
-                          className="absolute bottom-2 top-2 rounded-lg border border-[#ffe900]/40 bg-[#ffe900]/12"
-                          style={{
-                            left: `${loopStartPercent}%`,
-                            right: `${100 - loopEndPercent}%`
-                          }}
-                        />
-                        <div
-                          className="absolute bottom-1.5 top-1.5 w-2 rounded-full bg-[#ffe900] shadow-[0_0_0_2px_rgba(0,0,0,0.35)]"
-                          style={{ left: `calc(${loopStartPercent}% - 4px)` }}
-                        />
-                        <div
-                          className="absolute bottom-1.5 top-1.5 w-2 rounded-full bg-white shadow-[0_0_0_2px_rgba(0,0,0,0.35)]"
-                          style={{ left: `calc(${loopEndPercent}% - 4px)` }}
-                        />
-                      </div>
-
-                      <input
-                        type="range"
-                        min={0}
-                        max={99}
-                        value={loopStartPercent}
-                        onChange={(event) =>
-                          setLoopStartPercent(Math.min(loopEndPercent - 1, Math.max(0, Number(event.target.value) || 0)))
-                        }
-                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                        aria-label="Loop start"
-                      />
-                      <input
-                        type="range"
-                        min={1}
-                        max={100}
-                        value={loopEndPercent}
-                        onChange={(event) =>
-                          setLoopEndPercent(Math.max(loopStartPercent + 1, Math.min(100, Number(event.target.value) || 100)))
-                        }
-                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                        aria-label="Loop end"
-                      />
-                    </div>
-
-                    <p className="mt-2 text-xs text-white/45">
-                      {layers.length
-                        ? "Loop preview работает в блоке Last Take Preview и зацикливает выбранный фрагмент последнего тейка."
-                        : "Запиши первую дорожку, затем используй adjust-панель для настройки перед следующими тейками."}
-                    </p>
-                  </div>
-                </div>
+          <div className="rounded-xl border border-brand-border bg-white p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs uppercase tracking-[0.14em] text-brand-muted">Key</p>
+              <Button
+                type="button"
+                variant="secondary"
+                className={`h-8 rounded-lg px-2 text-xs ${
+                  songKeyAutoEnabled
+                    ? "border-[#c4d8c0] bg-[#eef7ea] text-[#315f3b] hover:bg-[#e7f3e2]"
+                    : "border-brand-border bg-white text-brand-muted hover:bg-[#f7faf2]"
+                }`}
+                onClick={() => void runAutoDetect("key")}
+                disabled={autoDetectLoading !== null}
+              >
+                {autoDetectLoading === "key" || autoDetectLoading === "both" ? "Auto..." : songKeyAutoEnabled ? "Auto ✓" : "Auto"}
+              </Button>
+            </div>
+            <div className="space-y-2">
+              <select
+                value={songKeyRoot ?? ""}
+                onChange={(event) => {
+                  setSongKeyRoot(event.target.value || null);
+                  setSongKeyAutoEnabled(false);
+                }}
+                className="h-10 w-full min-w-0 rounded-xl border border-brand-border bg-white px-2 text-sm text-brand-ink"
+              >
+                <option value="">Не выбрано</option>
+                {KEY_ROOTS.map((root) => (
+                  <option key={root} value={root}>{root}</option>
+                ))}
+              </select>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant={songKeyMode === "minor" ? "primary" : "secondary"}
+                  className="h-10 w-full px-3"
+                  onClick={() => {
+                    setSongKeyMode("minor");
+                    setSongKeyAutoEnabled(false);
+                  }}
+                >
+                  Min
+                </Button>
+                <Button
+                  type="button"
+                  variant={songKeyMode === "major" ? "primary" : "secondary"}
+                  className="h-10 w-full px-3"
+                  onClick={() => {
+                    setSongKeyMode("major");
+                    setSongKeyAutoEnabled(false);
+                  }}
+                >
+                  Maj
+                </Button>
               </div>
-            )}
+            </div>
+          </div>
 
-            {activePanel === "stems" && (
-              <div className="space-y-3">
-                <div className="rounded-2xl border border-white/5 bg-[#1a1b1f] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      className="rounded-xl bg-[#ffe900] text-black hover:bg-[#fff04a] disabled:bg-white/10 disabled:text-white/60"
-                      onClick={() => void renderStemsPreview()}
-                      disabled={!layers.length || sessionRenderBusy}
-                    >
-                      {stemsPreviewStatus === "processing" ? "Rendering..." : "Preview All Stems"}
-                    </Button>
-                    <p className="text-sm text-white/45">
-                      {layers.length
-                        ? "Быстрый preview всех активных дорожек перед финальным mix."
-                        : "Сначала запиши хотя бы одну дорожку."}
-                    </p>
-                  </div>
-                  {stemsPreviewError && <p className="mt-2 text-xs text-[#a4372a]">{stemsPreviewError}</p>}
-                </div>
+          <div className="col-span-2 rounded-xl border border-brand-border bg-white p-3 xl:col-span-1">
+            <p className="mb-2 text-xs uppercase tracking-[0.14em] text-brand-muted">Record</p>
+            <div className="mb-3 overflow-hidden rounded-xl border border-brand-border bg-[#f7faf2]">
+              <canvas ref={recordWaveCanvasRef} className="block h-20 w-full" />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={() => {
+                  if (recordingState === "idle") {
+                    void startRecording();
+                    return;
+                  }
+                  if (recordingState === "paused") {
+                    resumeRecording();
+                  }
+                }}
+                disabled={!canPrimaryRecordButton}
+              >
+                {primaryRecordButtonLabel}
+              </Button>
+              <Button type="button" variant="secondary" onClick={pauseRecording} disabled={!canPause}>
+                Pause
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={deleteCurrentTake}
+                disabled={!canResume}
+                className="border-red-300 bg-[#fff2ef] text-[#a4372a] hover:bg-[#ffe7e0] disabled:border-brand-border disabled:bg-white disabled:text-brand-muted"
+              >
+                Delete
+              </Button>
+              <Button
+                type="button"
+                variant={showSaveOnStopButton ? "primary" : "secondary"}
+                className={
+                  showSaveOnStopButton
+                    ? "bg-[#6f9f7b] text-white hover:bg-[#5f8f6c]"
+                    : "border-brand-border bg-white"
+                }
+                onClick={stopRecording}
+                disabled={!canStop}
+              >
+                {showSaveOnStopButton ? "Save" : "Stop"}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-brand-muted">
+              Состояние: <span className="font-medium text-brand-ink">{recordingState}</span> • {formatDuration(recordingSeconds)}
+            </p>
+          </div>
 
-                {stemsPreviewUrl ? (
-                  <div className="rounded-xl border border-white/5 bg-[#141519] p-3">
-                    <p className="mb-2 text-xs font-medium uppercase tracking-wider text-white/45">Stems Preview</p>
-                    <AudioWaveformPlayer src={stemsPreviewUrl} barCount={140} />
-                  </div>
-                ) : stemsPreviewStatus === "processing" ? (
-                  <div className="rounded-xl border border-dashed border-white/10 bg-[#141519] p-4 text-center text-sm text-white/45">
-                    Собираем общий preview дорожек...
-                  </div>
-                ) : null}
+        </div>
 
-                {layers.length === 0 ? (
-                  <p className="rounded-xl border border-dashed border-white/10 bg-[#141519] p-4 text-center text-sm text-white/45">
-                    Пока нет дорожек. Запиши первую, и они появятся здесь.
-                  </p>
-                ) : (
-                  layers.map((layer) => (
-                    <div key={layer.id} className="space-y-2 rounded-xl border border-white/5 bg-[#141519] p-3">
-                      <div className="flex items-center gap-2">
-                        <Input
-                          value={layer.name}
-                          onChange={(event) =>
-                            setLayers((prev) =>
-                              prev.map((current) => (current.id === layer.id ? { ...current, name: event.target.value } : current))
-                            )
-                          }
-                          className="min-w-0 flex-1 border-white/10 bg-[#202127] text-white"
-                        />
-                        <Button
-                          variant="secondary"
-                          className={`h-8 w-8 shrink-0 rounded-lg border-white/10 p-0 text-white hover:bg-white/10 ${
-                            layer.muted ? "bg-[#26282d]" : "bg-[#1a1b1f]"
-                          }`}
-                          onClick={() =>
-                            setLayers((prev) =>
-                              prev.map((current) => (current.id === layer.id ? { ...current, muted: !current.muted } : current))
-                            )
-                          }
-                          aria-label={layer.muted ? "Включить звук дорожки" : "Выключить звук дорожки"}
-                          title={layer.muted ? "Включить звук" : "Выключить звук"}
-                        >
-                          {layer.muted ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          className="h-8 w-8 shrink-0 rounded-lg border-white/10 bg-[#1a1b1f] p-0 text-white hover:bg-white/10"
-                          onClick={() => removeLayer(layer.id)}
-                          aria-label="Удалить дорожку"
-                          title="Удалить"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                      <AudioWaveformPlayer src={layer.url} barCount={120} className="w-full min-w-0" />
-                      <div className="flex items-center gap-3">
-                        <span className="w-16 text-xs font-medium uppercase tracking-wider text-white/45">Volume</span>
+        {autoDetectError && (
+          <div className="mt-3 rounded-xl border border-red-300/70 bg-[#fff2ef] px-3 py-2 text-xs text-[#a4372a]">
+            {autoDetectError}
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-2 rounded-2xl border border-brand-border bg-white/80 p-2">
+        {([
+          { id: "tracks", label: "Tracks" },
+          { id: "fx", label: "FX" },
+          { id: "mix", label: "Mix" }
+        ] as const).map((item) => (
+          <Button
+            key={item.id}
+            type="button"
+            variant={tab === item.id ? "primary" : "secondary"}
+            className={tab === item.id ? "" : "border-brand-border bg-white"}
+            onClick={() => setTab(item.id)}
+          >
+            {item.label}
+          </Button>
+        ))}
+      </div>
+
+      {tab === "tracks" && (
+        <div className="space-y-4 rounded-2xl border border-brand-border bg-white p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              className="border-brand-border bg-white"
+              onClick={() => beatFileInputRef.current?.click()}
+            >
+              Загрузить бит
+            </Button>
+            <Button type="button" onClick={() => void renderStemsPreview()} disabled={stemsPreviewStatus === "processing" || mixing || !layers.length}>
+              {stemsPreviewStatus === "processing" ? "Собираем preview..." : "Preview Mix (быстро)"}
+            </Button>
+            <p className="text-sm text-brand-muted">Preview всех активных дорожек с учётом volume/pan и FX для записанных дорожек.</p>
+          </div>
+          <input
+            ref={beatFileInputRef}
+            type="file"
+            accept="audio/*"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null;
+              event.currentTarget.value = "";
+              if (!file) return;
+              void importAudioLayerFromFile(file, {
+                role: "beat",
+                autoDetectTempoKey: true
+              });
+            }}
+          />
+          {stemsPreviewError && <p className="text-xs text-[#a4372a]">{stemsPreviewError}</p>}
+          {stemsPreviewUrl && (
+            <div className="rounded-xl border border-brand-border bg-[#f7faf2] p-3">
+              <p className="mb-2 text-xs uppercase tracking-[0.16em] text-brand-muted">Mix Preview</p>
+              <AudioWaveformPlayer src={stemsPreviewUrl} className="[&_p]:text-brand-muted" />
+            </div>
+          )}
+
+          {layers.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-brand-border bg-[#f7faf2] p-4 text-sm text-brand-muted">
+              Пока нет дорожек. Запишите первую дорожку или импортируйте бит.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {layers.map((layer) => {
+                const selected = selectedLayerId === layer.id;
+                return (
+                  <div
+                    key={layer.id}
+                    className={`rounded-2xl border p-3 ${selected ? "border-[#7ca27f] bg-[#f4faef]" : "border-brand-border bg-[#fbfdf8]"}`}
+                  >
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedLayerId(layer.id)}
+                        className={`rounded-lg border px-2 py-1 text-xs font-semibold uppercase tracking-[0.12em] ${
+                          selected ? "border-[#7ca27f] bg-[#eef7ea] text-[#315f3b]" : "border-brand-border bg-white text-brand-muted"
+                        }`}
+                      >
+                        {selected ? "Выбрана" : "Выбрать"}
+                      </button>
+                      {formatRoleLabel(layer.role) && (
+                        <span className="rounded-lg border border-brand-border bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-brand-muted">
+                          {formatRoleLabel(layer.role)}
+                        </span>
+                      )}
+                      <span className="text-xs text-brand-muted">{layer.kind === "import" ? "Импорт" : "Запись"}</span>
+                      <span className="ml-auto text-xs text-brand-muted">{formatDuration(layer.durationSec)}</span>
+                    </div>
+
+                    <div className="mb-2 flex items-center gap-2">
+                      <Input
+                        value={layer.name}
+                        onChange={(event) => updateLayer(layer.id, (current) => ({ ...current, name: event.target.value }))}
+                        className="h-10"
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="h-10 w-10 border-brand-border bg-white p-0"
+                        onClick={() => updateLayer(layer.id, (current) => ({ ...current, muted: !current.muted }))}
+                        title={layer.muted ? "Включить" : "Выключить"}
+                      >
+                        {layer.muted ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="h-10 w-10 border-brand-border bg-white p-0"
+                        onClick={() => removeLayer(layer.id)}
+                        title="Удалить"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+
+                    <AudioWaveformPlayer src={layer.url} className="mb-2" />
+
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <div className="rounded-xl border border-brand-border bg-white p-2">
+                        <div className="mb-1 flex items-center justify-between text-xs text-brand-muted">
+                          <span>Volume</span>
+                          <span>{Math.round(layer.volume * 100)}%</span>
+                        </div>
                         <input
                           type="range"
                           min={0}
                           max={100}
                           value={Math.round(layer.volume * 100)}
                           onChange={(event) =>
-                            setLayers((prev) =>
-                              prev.map((current) =>
-                                current.id === layer.id ? { ...current, volume: Number(event.target.value) / 100 } : current
-                              )
-                            )
+                            updateLayer(layer.id, (current) => ({ ...current, volume: clamp(Number(event.target.value) / 100, 0, 1) }))
                           }
-                          className="h-2 w-full cursor-pointer accent-[#ffe900]"
+                          className="h-2 w-full cursor-pointer accent-[#2A342C]"
                         />
-                        <span className="w-10 text-right text-xs text-white/55">{Math.round(layer.volume * 100)}%</span>
                       </div>
-                      <p className="text-xs text-white/45">{formatDuration(layer.durationSec)}</p>
+
+                      <div className="rounded-xl border border-brand-border bg-white p-2">
+                        <div className="mb-1 flex items-center justify-between text-xs text-brand-muted">
+                          <span>Pan</span>
+                          <span>{formatPanLabel(layer.pan)}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={-100}
+                          max={100}
+                          value={clampPanValue(layer.pan)}
+                          onChange={(event) =>
+                            updateLayer(layer.id, (current) => ({ ...current, pan: clampPanValue(Number(event.target.value)) }))
+                          }
+                          className="h-2 w-full cursor-pointer accent-[#2A342C]"
+                        />
+                      </div>
                     </div>
-                  ))
-                )}
-              </div>
-            )}
-            {activePanel === "fx" && (
-              <div className="space-y-3">
-                {!lastRecordedLayer || !lastRecordedLayerFxSettings ? (
-                  <div className="rounded-2xl border border-dashed border-white/10 bg-[#141519] p-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/45">Equalizer</p>
-                    <p className="mt-1 text-sm text-white/45">Сначала запиши дубль, чтобы открыть EQ-панель.</p>
                   </div>
-                ) : (
-                  <div className="rounded-2xl border border-white/5 bg-[#1a1b1f] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <div>
-                        <p className="text-2xl font-semibold tracking-tight text-white">Equalizer</p>
-                        <p className="text-sm text-white/45">
-                          {lastRecordedLayer.name} • {formatDuration(lastRecordedLayer.durationSec)}
-                        </p>
-                      </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "fx" && (
+        <div className="space-y-4 rounded-2xl border border-brand-border bg-white p-4">
+          {!selectedRecordedLayer || !selectedRecordedLayerFx ? (
+            <p className="rounded-xl border border-dashed border-brand-border bg-[#f7faf2] p-4 text-sm text-brand-muted">
+              Выберите записанную дорожку в `Tracks`, чтобы открыть FX.
+            </p>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">FX for selected track</p>
+                  <h4 className="text-lg font-semibold text-brand-ink">{selectedRecordedLayer.name}</h4>
+                  <p className="text-sm text-brand-muted">{formatRoleLabel(selectedRecordedLayer.role) ?? "Track"} • {formatDuration(selectedRecordedLayer.durationSec)}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" className="border-brand-border bg-white" onClick={() => applyFxPreset("clean")}>
+                    Clean
+                  </Button>
+                  <Button type="button" variant="secondary" className="border-brand-border bg-white" onClick={() => applyFxPreset("warm")}>
+                    Warm Vox
+                  </Button>
+                  <Button type="button" variant="secondary" className="border-brand-border bg-white" onClick={() => applyFxPreset("doubleWide")}>
+                    Double Wide
+                  </Button>
+                  <Button type="button" variant="secondary" className="border-brand-border bg-white" onClick={() => applyFxPreset("phone")}>
+                    Phone
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" onClick={() => void renderSelectedFxPreview()} disabled={fxPreviewStatus === "processing"}>
+                  {fxPreviewStatus === "processing" ? "Рендерим FX preview..." : "Preview selected track FX"}
+                </Button>
+                <Button type="button" variant="secondary" className="border-brand-border bg-white" onClick={() => updateSelectedLayerFx((fx) => ({
+                  ...fx,
+                  eq: { ...fx.eq, enabled: false },
+                  autotune: { ...fx.autotune, enabled: false },
+                  distortion: { ...fx.distortion, enabled: false },
+                  filter: { ...fx.filter, enabled: false },
+                  delay: { ...fx.delay, enabled: false },
+                  reverb: { ...fx.reverb, enabled: false }
+                }))}>
+                  Bypass all
+                </Button>
+              </div>
+              {fxPreviewError && <p className="text-xs text-[#a4372a]">{fxPreviewError}</p>}
+              <div className="rounded-xl border border-brand-border bg-[#f7faf2] p-3">
+                <p className="mb-2 text-xs uppercase tracking-[0.16em] text-brand-muted">Selected Track Preview</p>
+                <AudioWaveformPlayer src={fxPreviewUrl || selectedRecordedLayer.url} />
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div className="rounded-xl border border-brand-border bg-[#fbfdf8] p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-sm font-semibold text-brand-ink">EQ (3 bands)</p>
+                    <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => setFxBlockEnabled("eq", !lastRecordedLayerFxSettings.eq.enabled)}
-                        className={
-                          lastRecordedLayerFxSettings.eq.enabled
-                            ? "rounded-2xl bg-[#ffe900] px-4 py-2 text-sm font-semibold text-black"
-                            : "rounded-2xl border border-white/10 bg-[#141519] px-4 py-2 text-sm font-semibold text-white/60"
-                        }
+                        onClick={() => toggleFxPanel("eq")}
+                        className="rounded-lg border border-brand-border bg-white px-2 py-1 text-xs font-semibold text-brand-muted"
                       >
-                        {lastRecordedLayerFxSettings.eq.enabled ? "BYPASS" : "ENABLE"}
+                        {fxPanelsOpen.eq ? "Collapse" : "Expand"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateSelectedLayerFx((fx) => ({ ...fx, eq: { ...fx.eq, enabled: !fx.eq.enabled } }))}
+                        className={`rounded-lg border px-2 py-1 text-xs font-semibold ${
+                          selectedRecordedLayerFx.eq.enabled ? "border-[#7ca27f] bg-[#eef7ea] text-[#315f3b]" : "border-brand-border bg-white text-brand-muted"
+                        }`}
+                      >
+                        {selectedRecordedLayerFx.eq.enabled ? "On" : "Off"}
                       </button>
                     </div>
+                  </div>
+                  {fxPanelsOpen.eq && (
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {[0, 2, 4].map((bandIndex, idx) => {
+                        const band = selectedRecordedLayerFx.eq.bands[bandIndex];
+                        const label = idx === 0 ? "Low" : idx === 1 ? "Mid" : "High";
+                        return (
+                          <KnobControl
+                            key={`${label}-${bandIndex}`}
+                            label={label}
+                            value={band.gainDb}
+                            min={-12}
+                            max={12}
+                            step={0.5}
+                            formatValue={(nextValue) => `${nextValue > 0 ? "+" : ""}${nextValue.toFixed(1)} dB`}
+                            onChange={(nextValue) =>
+                              updateSelectedLayerFx((fx) => ({
+                                ...fx,
+                                eq: {
+                                  ...fx.eq,
+                                  bands: fx.eq.bands.map((current, currentIndex) =>
+                                    currentIndex === bandIndex ? { ...current, gainDb: nextValue } : current
+                                  )
+                                }
+                              }))
+                            }
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
 
-                    <FxEqGraphPanel
-                      bands={lastRecordedLayerFxSettings.eq.bands}
-                      onBandToggle={(index) =>
-                        updateFxForLastRecorded((prev) => ({
-                          ...prev,
-                          eq: {
-                            ...prev.eq,
-                            bands: prev.eq.bands.map((current, bandIndex) =>
-                              bandIndex === index ? { ...current, enabled: !current.enabled } : current
-                            )
-                          }
-                        }))
-                      }
-                      onBandGainChange={(index, nextGainDb) =>
-                        updateFxForLastRecorded((prev) => ({
-                          ...prev,
-                          eq: {
-                            ...prev.eq,
-                            bands: prev.eq.bands.map((current, bandIndex) =>
-                              bandIndex === index ? { ...current, gainDb: nextGainDb } : current
-                            )
-                          }
-                        }))
-                      }
-                    />
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-brand-border bg-[#fbfdf8] p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-sm font-semibold text-brand-ink">Reverb</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleFxPanel("reverb")}
+                          className="rounded-lg border border-brand-border bg-white px-2 py-1 text-xs font-semibold text-brand-muted"
+                        >
+                          {fxPanelsOpen.reverb ? "Collapse" : "Expand"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateSelectedLayerFx((fx) => ({ ...fx, reverb: { ...fx.reverb, enabled: !fx.reverb.enabled } }))}
+                          className={`rounded-lg border px-2 py-1 text-xs font-semibold ${
+                            selectedRecordedLayerFx.reverb.enabled ? "border-[#7ca27f] bg-[#eef7ea] text-[#315f3b]" : "border-brand-border bg-white text-brand-muted"
+                          }`}
+                        >
+                          {selectedRecordedLayerFx.reverb.enabled ? "On" : "Off"}
+                        </button>
+                      </div>
+                    </div>
+                    {fxPanelsOpen.reverb && (
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        {[
+                          ["Mix", "mix", 0, 100],
+                          ["Decay", "decay", 0, 100],
+                          ["Tone", "tone", 0, 100]
+                        ].map(([label, key, min, max]) => (
+                          <KnobControl
+                            key={String(key)}
+                            label={String(label)}
+                            value={Number(selectedRecordedLayerFx.reverb[key as keyof typeof selectedRecordedLayerFx.reverb])}
+                            min={Number(min)}
+                            max={Number(max)}
+                            step={1}
+                            formatValue={(nextValue) => `${Math.round(nextValue)}`}
+                            onChange={(nextValue) =>
+                              updateSelectedLayerFx((fx) => ({
+                                ...fx,
+                                reverb: { ...fx.reverb, [key]: nextValue }
+                              }))
+                            }
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button
+                  <div className="rounded-xl border border-brand-border bg-[#fbfdf8] p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-sm font-semibold text-brand-ink">Delay</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleFxPanel("delay")}
+                          className="rounded-lg border border-brand-border bg-white px-2 py-1 text-xs font-semibold text-brand-muted"
+                        >
+                          {fxPanelsOpen.delay ? "Collapse" : "Expand"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateSelectedLayerFx((fx) => ({ ...fx, delay: { ...fx.delay, enabled: !fx.delay.enabled } }))}
+                          className={`rounded-lg border px-2 py-1 text-xs font-semibold ${
+                            selectedRecordedLayerFx.delay.enabled ? "border-[#7ca27f] bg-[#eef7ea] text-[#315f3b]" : "border-brand-border bg-white text-brand-muted"
+                          }`}
+                        >
+                          {selectedRecordedLayerFx.delay.enabled ? "On" : "Off"}
+                        </button>
+                      </div>
+                    </div>
+                    {fxPanelsOpen.delay && (
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        {[
+                          ["Mix", "mix", 0, 100],
+                          ["Feedback", "feedback", 0, 90],
+                          ["Time ms", "timeMs", 40, 1200]
+                        ].map(([label, key, min, max]) => (
+                          <KnobControl
+                            key={String(key)}
+                            label={String(label)}
+                            value={Number(selectedRecordedLayerFx.delay[key as keyof typeof selectedRecordedLayerFx.delay])}
+                            min={Number(min)}
+                            max={Number(max)}
+                            step={1}
+                            formatValue={(nextValue) => `${Math.round(nextValue)}`}
+                            onChange={(nextValue) =>
+                              updateSelectedLayerFx((fx) => ({
+                                ...fx,
+                                delay: { ...fx.delay, syncMode: "free", [key]: nextValue }
+                              }))
+                            }
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div className="rounded-xl border border-brand-border bg-[#fbfdf8] p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-sm font-semibold text-brand-ink">Filter</p>
+                    <div className="flex items-center gap-2">
+                      <button
                         type="button"
-                        variant="secondary"
-                        className="h-10 rounded-xl border-white/10 bg-[#141519] text-white hover:bg-white/10"
-                        onClick={() => void renderFxPreviewNow()}
-                        disabled={fxPreviewStatus === "processing"}
+                        onClick={() => toggleFxPanel("filter")}
+                        className="rounded-lg border border-brand-border bg-white px-2 py-1 text-xs font-semibold text-brand-muted"
                       >
-                        {fxPreviewStatus === "processing" ? "Rendering..." : "Refresh preview"}
-                      </Button>
-                      <Button
+                        {fxPanelsOpen.filter ? "Collapse" : "Expand"}
+                      </button>
+                      <button
                         type="button"
-                        variant="secondary"
-                        className="h-10 rounded-xl border-white/10 bg-[#141519] text-white hover:bg-white/10"
-                        onClick={bypassAllFx}
+                        onClick={() => updateSelectedLayerFx((fx) => ({ ...fx, filter: { ...fx.filter, enabled: !fx.filter.enabled } }))}
+                        className={`rounded-lg border px-2 py-1 text-xs font-semibold ${
+                          selectedRecordedLayerFx.filter.enabled ? "border-[#7ca27f] bg-[#eef7ea] text-[#315f3b]" : "border-brand-border bg-white text-brand-muted"
+                        }`}
                       >
-                        Bypass all FX
+                        {selectedRecordedLayerFx.filter.enabled ? "On" : "Off"}
+                      </button>
+                    </div>
+                  </div>
+                  {fxPanelsOpen.filter && (
+                    <>
+                      <div className="mb-2 grid grid-cols-3 gap-2">
+                        {(["lowpass", "bandpass", "highpass"] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => updateSelectedLayerFx((fx) => ({ ...fx, filter: { ...fx.filter, mode } }))}
+                            className={`rounded-lg border px-2 py-1 text-xs ${
+                              selectedRecordedLayerFx.filter.mode === mode
+                                ? "border-[#7ca27f] bg-[#eef7ea] text-[#315f3b]"
+                                : "border-brand-border bg-white text-brand-muted"
+                            }`}
+                          >
+                            {mode}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        {[
+                          ["Cutoff", "cutoff", 20, 20000],
+                          ["Resonance", "resonance", 0, 20],
+                          ["Mix", "mix", 0, 100]
+                        ].map(([label, key, min, max]) => (
+                          <KnobControl
+                            key={String(key)}
+                            label={String(label)}
+                            value={Number(selectedRecordedLayerFx.filter[key as keyof typeof selectedRecordedLayerFx.filter])}
+                            min={Number(min)}
+                            max={Number(max)}
+                            step={key === "resonance" ? 0.1 : 1}
+                            formatValue={(nextValue) => (key === "resonance" ? nextValue.toFixed(1) : `${Math.round(nextValue)}`)}
+                            onChange={(nextValue) =>
+                              updateSelectedLayerFx((fx) => ({
+                                ...fx,
+                                filter: { ...fx.filter, [key]: nextValue }
+                              }))
+                            }
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-brand-border bg-[#fbfdf8] p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-sm font-semibold text-brand-ink">Drive / Tune</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => toggleFxPanel("driveTune")}
+                        className="rounded-lg border border-brand-border bg-white px-2 py-1 text-xs font-semibold text-brand-muted"
+                      >
+                        {fxPanelsOpen.driveTune ? "Collapse" : "Expand"}
+                      </button>
+                      <Button type="button" variant="secondary" className="border-brand-border bg-white" onClick={() => updateSelectedLayerFx(() => createDefaultFxChainSettings())}>
+                        Reset FX
                       </Button>
                     </div>
-                    {fxPreviewError && <p className="mt-2 text-xs text-red-300">{fxPreviewError}</p>}
                   </div>
-                )}
-              </div>
-            )}
-            {activePanel === "mix" && (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    className="rounded-xl border border-white/10 bg-[#141519] text-white hover:bg-white/10"
-                    onClick={renderMixdown}
-                    disabled={!layers.length || sessionRenderBusy}
-                  >
-                    {mixing ? "Rendering..." : "Render Mix"}
-                  </Button>
-                  <p className="text-sm text-white/45">
-                    {layers.length ? "Сводит активные дорожки в один файл." : "Сначала запиши хотя бы одну дорожку."}
-                  </p>
+                  {fxPanelsOpen.driveTune && (
+                    <>
+                  <div className="mb-3 rounded-xl border border-brand-border bg-white p-2">
+                    <div className="mb-2 flex items-center justify-between text-xs text-brand-muted">
+                      <span>Distortion</span>
+                      <button
+                        type="button"
+                        onClick={() => updateSelectedLayerFx((fx) => ({ ...fx, distortion: { ...fx.distortion, enabled: !fx.distortion.enabled } }))}
+                        className={`rounded border px-2 py-0.5 text-[11px] ${
+                          selectedRecordedLayerFx.distortion.enabled ? "border-[#7ca27f] bg-[#eef7ea] text-[#315f3b]" : "border-brand-border bg-white text-brand-muted"
+                        }`}
+                      >
+                        {selectedRecordedLayerFx.distortion.enabled ? "On" : "Off"}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {[
+                        ["Drive", "drive"],
+                        ["Mix", "mix"],
+                        ["Tone", "tone"]
+                      ].map(([label, key]) => (
+                        <KnobControl
+                          key={String(key)}
+                          label={String(label)}
+                          value={Number(selectedRecordedLayerFx.distortion[key as keyof typeof selectedRecordedLayerFx.distortion])}
+                          min={0}
+                          max={100}
+                          step={1}
+                          formatValue={(nextValue) => `${Math.round(nextValue)}`}
+                          onChange={(nextValue) =>
+                            updateSelectedLayerFx((fx) => ({
+                              ...fx,
+                              distortion: { ...fx.distortion, [key]: nextValue }
+                            }))
+                          }
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-brand-border bg-white p-2">
+                    <div className="mb-2 flex items-center justify-between text-xs text-brand-muted">
+                      <span>Autotune (experimental)</span>
+                      <button
+                        type="button"
+                        onClick={() => updateSelectedLayerFx((fx) => ({ ...fx, autotune: { ...fx.autotune, enabled: !fx.autotune.enabled } }))}
+                        className={`rounded border px-2 py-0.5 text-[11px] ${
+                          selectedRecordedLayerFx.autotune.enabled ? "border-[#7ca27f] bg-[#eef7ea] text-[#315f3b]" : "border-brand-border bg-white text-brand-muted"
+                        }`}
+                      >
+                        {selectedRecordedLayerFx.autotune.enabled ? "On" : "Off"}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {[
+                        ["Amount", "amount"],
+                        ["Speed", "retuneSpeed"],
+                        ["Mix", "mix"]
+                      ].map(([label, key]) => (
+                        <KnobControl
+                          key={String(key)}
+                          label={String(label)}
+                          value={Number(selectedRecordedLayerFx.autotune[key as keyof typeof selectedRecordedLayerFx.autotune])}
+                          min={0}
+                          max={100}
+                          step={1}
+                          formatValue={(nextValue) => `${Math.round(nextValue)}`}
+                          onChange={(nextValue) =>
+                            updateSelectedLayerFx((fx) => ({
+                              ...fx,
+                              autotune: { ...fx.autotune, [key]: nextValue }
+                            }))
+                          }
+                        />
+                      ))}
+                    </div>
+                  </div>
+                    </>
+                  )}
                 </div>
-                {mixPreviewUrl ? (
-                  <div className="space-y-2 rounded-xl border border-white/5 bg-[#141519] p-3">
-                    <p className="text-xs font-medium uppercase tracking-wider text-white/45">Preview</p>
-                    <AudioWaveformPlayer src={mixPreviewUrl} barCount={160} />
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-dashed border-white/10 bg-[#141519] p-4 text-center text-sm text-white/45">
-                    После `Render Mix` здесь появится предпросмотр волны.
-                  </div>
-                )}
               </div>
-            )}
+
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === "mix" && (
+        <div className="space-y-4 rounded-2xl border border-brand-border bg-white p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" onClick={() => void renderStemsPreview()} disabled={stemsPreviewStatus === "processing" || mixing || !layers.length}>
+              {stemsPreviewStatus === "processing" ? "Собираем preview..." : "Собрать preview mix"}
+            </Button>
+            <Button type="button" onClick={() => void renderMixdown()} disabled={mixing || !layers.length}>
+              {mixing ? "Rendering..." : "Render Mix"}
+            </Button>
+            <p className="text-sm text-brand-muted">Финальный `Render Mix` передаст WAV в demo-flow для сохранения.</p>
           </div>
-      </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-brand-border bg-[#f7faf2] p-3">
+              <p className="mb-2 text-xs uppercase tracking-[0.16em] text-brand-muted">Preview Mix</p>
+              {stemsPreviewUrl ? (
+                <AudioWaveformPlayer src={stemsPreviewUrl} />
+              ) : (
+                <p className="rounded-lg border border-dashed border-brand-border bg-white p-3 text-sm text-brand-muted">
+                  Нажмите `Собрать preview mix`.
+                </p>
+              )}
+              {stemsPreviewError && <p className="mt-2 text-xs text-[#a4372a]">{stemsPreviewError}</p>}
+            </div>
+
+            <div className="rounded-xl border border-brand-border bg-[#f7faf2] p-3">
+              <p className="mb-2 text-xs uppercase tracking-[0.16em] text-brand-muted">Final Render</p>
+              {mixPreviewUrl ? (
+                <AudioWaveformPlayer src={mixPreviewUrl} />
+              ) : (
+                <p className="rounded-lg border border-dashed border-brand-border bg-white p-3 text-sm text-brand-muted">
+                  После `Render Mix` здесь появится финальный preview (stereo WAV).
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 });

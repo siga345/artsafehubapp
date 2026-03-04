@@ -28,6 +28,23 @@ MVP считается готовым, если артист может:
 6. Найти специалиста/студию в `FIND` и нажать `Связаться`.
 7. Открыть `ID` и увидеть свой `SAFE ID`.
 
+## PATH и микро-шаги
+
+`HOME` в MVP строится вокруг PATH-логики: стадии, уровня, ритма и одного микро-шага на сегодня.
+
+- Канонические стадии PATH описаны в `src/lib/path-stages.ts`.
+- Runtime-список микро-шагов хранится в `src/lib/micro-step-prompts.ts`.
+- API выдачи микро-шага: `src/app/api/home/micro-step/route.ts`.
+- Расширенная методичка по микро-шагам: `docs/microsteps.md`.
+
+Важно: `docs/microsteps.md` не является прямым source of truth для runtime. Если вы меняете продуктовые микро-шаги, синхронизируйте и код, и методичку.
+
+## Документация
+
+- Быстрый обзор проекта: `docs/project-study-guide-ru.md`
+- Методичка по микро-шагам PATH: `docs/microsteps.md`
+- Технические контракты post-MVP: `docs/post-mvp-contracts.md`
+
 ## Технологии
 - Next.js (App Router) + TypeScript
 - TailwindCSS + подход shadcn/ui
@@ -126,7 +143,9 @@ docker-compose up --build
   - `npm run lint`
   - `npm run typecheck`
   - `npm run build`
-- CI (`.github/workflows/ci.yml`) запускает `lint + typecheck + build`.
+- E2E smoke:
+  - `npm run test:e2e:smoke` (требует запущенный сервер и доступную БД)
+- CI (`.github/workflows/ci.yml`) запускает `lint + typecheck + build + e2e smoke`.
 
 ### Опционально: pre-commit hook
 ```bash

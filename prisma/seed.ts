@@ -8,8 +8,15 @@ async function main() {
   const passwordHash = await bcrypt.hash("demo1234", 10);
 
   await prisma.demo.deleteMany();
+  await prisma.communityLike.deleteMany();
+  await prisma.communityAchievement.deleteMany();
+  await prisma.communityPost.deleteMany();
+  await prisma.communityEvent.deleteMany();
+  await prisma.featuredCreator.deleteMany();
+  await prisma.friendship.deleteMany();
   await prisma.track.deleteMany();
   await prisma.folder.deleteMany();
+  await prisma.artistIdentityProfile.deleteMany();
   await prisma.dailyCheckIn.deleteMany();
   await prisma.dailyMicroStep.deleteMany();
   await prisma.weeklyActivity.deleteMany();
@@ -88,6 +95,17 @@ async function main() {
     }
   });
 
+  await prisma.artistIdentityProfile.create({
+    data: {
+      userId: user.id,
+      identityStatement: "Пишу ночные песни про движение, уязвимость и внутренний свет.",
+      mission: "Собирать вокруг музыки пространство, где честность не маскируют.",
+      philosophy: "Лучший релиз начинается с честного внутреннего ритма.",
+      coreThemes: ["ночь", "уязвимость", "движение"],
+      aestheticKeywords: ["urban glow", "cinematic", "soft grit"]
+    }
+  });
+
   const folder = await prisma.folder.create({
     data: {
       userId: user.id,
@@ -155,6 +173,8 @@ async function main() {
     }
   });
 
+  const createdSpecialists: Array<{ id: string; nickname: string; safeId: string }> = [];
+
   for (const specialist of findTestProfiles) {
     const createdUser = await prisma.user.create({
       data: {
@@ -184,14 +204,102 @@ async function main() {
         contactUrl: specialist.contactUrl
       }
     });
+
+    createdSpecialists.push({
+      id: createdUser.id,
+      nickname: createdUser.nickname,
+      safeId: createdUser.safeId
+    });
   }
+
+  const featuredSpecialists = createdSpecialists.slice(0, 3);
+  for (const [index, creator] of [user, ...featuredSpecialists].entries()) {
+    await prisma.featuredCreator.create({
+      data: {
+        userId: creator.id,
+        sortIndex: index,
+        reason:
+          creator.id === user.id
+            ? "Рекомендуем обратить внимание на путь и новые версии."
+            : "Выбранный creator недели."
+      }
+    });
+  }
+
+  if (featuredSpecialists[0]) {
+    await prisma.friendship.create({
+      data: {
+        requesterUserId: user.id,
+        addresseeUserId: featuredSpecialists[0].id,
+        status: "ACCEPTED",
+        respondedAt: new Date()
+      }
+    });
+  }
+
+  if (featuredSpecialists[1]) {
+    await prisma.friendship.create({
+      data: {
+        requesterUserId: featuredSpecialists[1].id,
+        addresseeUserId: user.id,
+        status: "PENDING"
+      }
+    });
+  }
+
+  await prisma.communityPost.create({
+    data: {
+      authorUserId: user.id,
+      text: "Закрепил новый референс-пак и докрутил настроение для следующей версии Night Ride."
+    }
+  });
+
+  await prisma.communityAchievement.create({
+    data: {
+      userId: user.id,
+      type: "TRACK_CREATED",
+      title: "Новый трек в работе",
+      body: "Добавлен трек «Night Ride».",
+      dedupeKey: `track_created:${track.id}`,
+      sourceTrackId: track.id,
+      metadata: {
+        trackTitle: track.title
+      }
+    }
+  });
+
+  await prisma.communityEvent.createMany({
+    data: [
+      {
+        title: "Listening Circle: February Cuts",
+        slug: "listening-circle-february-cuts",
+        description: "Редакторский онлайн-разбор новых демок и релизных подходов внутри сообщества.",
+        startsAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 2),
+        isOnline: true,
+        hostLabel: "ART SAFE PLACE",
+        status: "PUBLISHED"
+      },
+      {
+        title: "Creator Meetup: Moscow Session",
+        slug: "creator-meetup-moscow-session",
+        description: "Оффлайн-встреча креаторов, обмен опытом по команде, пути и релизному циклу.",
+        startsAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 6),
+        city: "Москва",
+        isOnline: false,
+        hostLabel: "ART SAFE PLACE",
+        status: "PUBLISHED"
+      }
+    ]
+  });
 
   console.log("Seed data created", {
     pathStages: stages.length,
     artist: user.email,
     tracks: 1,
     demos: 2,
-    specialists: findTestProfiles.length
+    specialists: findTestProfiles.length,
+    featuredCreators: 4,
+    events: 2
   });
 }
 

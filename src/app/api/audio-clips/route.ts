@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { DemoVersionType as PrismaDemoVersionType } from "@prisma/client";
+import { DemoVersionType as PrismaDemoVersionType, FeedbackResolutionStatus, RecommendationSource, TrackDecisionType } from "@prisma/client";
 
 import { apiError, withApiHandler } from "@/lib/api";
+import { createTrackDecision } from "@/lib/recommendation-logging";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
 import {
@@ -9,6 +10,15 @@ import {
   normalizeUploadFilename,
   storageProvider
 } from "@/lib/storage";
+import { serializeVersionReflection } from "@/lib/track-workbench";
+import { promoteUserToFormationStageIfOnSpark } from "@/lib/user-path-stage";
+import {
+  createDemoCompletedAchievement,
+  createDemoUploadedAchievement,
+  createPathStageReachedAchievement,
+  createReleaseReadyAchievement,
+  createTrackReturnedAchievement
+} from "@/lib/community/achievements";
 
 function parseOptionalFiniteNumber(value: FormDataEntryValue | null): number | null {
   if (value === null) return null;
@@ -55,6 +65,7 @@ export const GET = withApiHandler(async () => {
   const clips = await prisma.demo.findMany({
     where: { track: { userId: user.id } },
     include: {
+      versionReflection: true,
       track: {
         select: {
           id: true,
@@ -65,7 +76,15 @@ export const GET = withApiHandler(async () => {
     orderBy: { createdAt: "desc" }
   });
 
-  return NextResponse.json(clips);
+  return NextResponse.json(
+    clips.map((clip) => ({
+      ...clip,
+      createdAt: clip.createdAt.toISOString(),
+      releaseDate: clip.releaseDate ? clip.releaseDate.toISOString().slice(0, 10) : null,
+      detectedAt: clip.detectedAt?.toISOString() ?? null,
+      versionReflection: serializeVersionReflection(clip.versionReflection, clip.textNote)
+    }))
+  );
 });
 
 export const POST = withApiHandler(async (request: Request) => {
@@ -113,6 +132,38 @@ export const POST = withApiHandler(async (request: Request) => {
     throw apiError(403, "Cannot attach demo to this track");
   }
 
+  const feedbackItemIds = Array.from(
+    new Set(
+      formData
+        .getAll("feedbackItemIds")
+        .map((value) => String(value).trim())
+        .filter(Boolean)
+    )
+  );
+
+  if (feedbackItemIds.length > 0) {
+    const feedbackItems = await prisma.feedbackItem.findMany({
+      where: {
+        id: { in: feedbackItemIds },
+        request: {
+          trackId,
+          userId: user.id
+        },
+        resolution: {
+          is: {
+            status: FeedbackResolutionStatus.NEXT_VERSION,
+            targetDemoId: null
+          }
+        }
+      },
+      select: { id: true }
+    });
+
+    if (feedbackItems.length !== feedbackItemIds.length) {
+      throw apiError(400, "Можно привязать только пункты фидбека со статусом «Проверить в следующей версии».");
+    }
+  }
+
   let releaseDate: Date | null = null;
   if (versionTypeRaw === "RELEASE") {
     const releaseDateRaw = parseOptionalString(formData.get("releaseDate"));
@@ -143,6 +194,11 @@ export const POST = withApiHandler(async (request: Request) => {
   const analysisSource = parseOptionalString(formData.get("analysisSource")) ?? "AUTO";
   const analysisVersion = parseOptionalString(formData.get("analysisVersion")) ?? "mvp-1";
   const hasAnyAnalysis = Boolean(analysisBpm !== null || (analysisKeyRoot && analysisKeyMode));
+  const legacyNoteText = parseOptionalString(formData.get("noteText"));
+  const reflectionWhyMade = parseOptionalString(formData.get("reflectionWhyMade"));
+  const reflectionWhatChanged = parseOptionalString(formData.get("reflectionWhatChanged"));
+  const reflectionWhatNotWorking = parseOptionalString(formData.get("reflectionWhatNotWorking"));
+  const hasStructuredReflection = Boolean(reflectionWhyMade || reflectionWhatChanged || reflectionWhatNotWorking);
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const filename = normalizeUploadFilename(file.name);
@@ -166,12 +222,24 @@ export const POST = withApiHandler(async (request: Request) => {
         data: { sortIndex: { increment: 1 } }
       });
 
+      const existingNonIdeaDemoCount =
+        versionTypeRaw === "IDEA_TEXT"
+          ? 0
+          : await tx.demo.count({
+              where: {
+                trackId,
+                versionType: {
+                  not: PrismaDemoVersionType.IDEA_TEXT
+                }
+              }
+            });
+
       const createdClip = await tx.demo.create({
         data: {
           trackId,
           audioUrl: stored.storageKey,
           duration: Math.max(0, Math.round(durationSec)),
-          textNote: String(formData.get("noteText") ?? "") || null,
+          textNote: legacyNoteText,
           versionType,
           ...(versionTypeRaw === "RELEASE" ? { releaseDate } : {}),
           sortIndex: 0,
@@ -182,9 +250,21 @@ export const POST = withApiHandler(async (request: Request) => {
           detectedKeyConfidence: analysisKeyConfidence,
           detectedAnalysisSource: hasAnyAnalysis ? analysisSource : null,
           detectedAnalysisVersion: hasAnyAnalysis ? analysisVersion : null,
-          detectedAt: hasAnyAnalysis ? new Date() : null
+          detectedAt: hasAnyAnalysis ? new Date() : null,
+          ...(hasStructuredReflection
+            ? {
+                versionReflection: {
+                  create: {
+                    whyMade: reflectionWhyMade,
+                    whatChanged: reflectionWhatChanged,
+                    whatNotWorking: reflectionWhatNotWorking
+                  }
+                }
+              }
+            : {})
         } as any,
         include: {
+          versionReflection: true,
           track: {
             select: {
               id: true,
@@ -193,6 +273,33 @@ export const POST = withApiHandler(async (request: Request) => {
           }
         }
       });
+
+      if (feedbackItemIds.length > 0) {
+        await tx.feedbackResolution.updateMany({
+          where: {
+            feedbackItemId: { in: feedbackItemIds },
+            userId: user.id,
+            status: FeedbackResolutionStatus.NEXT_VERSION,
+            targetDemoId: null
+          },
+          data: {
+            targetDemoId: createdClip.id,
+            updatedAt: new Date()
+          }
+        });
+      }
+
+      if (hasStructuredReflection && createdClip.versionReflection) {
+        await createTrackDecision(tx, {
+          userId: user.id,
+          trackId,
+          demoId: createdClip.id,
+          type: TrackDecisionType.REFLECTION_CAPTURED,
+          source: RecommendationSource.MANUAL,
+          summary: reflectionWhyMade || "Reflection captured",
+          reason: reflectionWhatNotWorking || reflectionWhatChanged || null
+        });
+      }
 
       const trackUpdateData: Record<string, unknown> = { updatedAt: new Date() };
       if (versionTypeRaw === "RELEASE") {
@@ -230,6 +337,56 @@ export const POST = withApiHandler(async (request: Request) => {
         });
       }
 
+      await createDemoUploadedAchievement(tx, {
+        userId: user.id,
+        demoId: createdClip.id,
+        trackId,
+        trackTitle: track.title,
+        versionType: versionTypeRaw
+      });
+
+      if (versionTypeRaw !== "IDEA_TEXT" && existingNonIdeaDemoCount === 0) {
+        await createDemoCompletedAchievement(tx, {
+          userId: user.id,
+          trackId,
+          demoId: createdClip.id,
+          trackTitle: track.title,
+          versionType: versionTypeRaw
+        });
+      }
+
+      const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
+      if (track.workbenchState === "DEFERRED" || Date.now() - track.updatedAt.getTime() >= fourteenDaysMs) {
+        await createTrackReturnedAchievement(tx, {
+          userId: user.id,
+          trackId,
+          trackTitle: track.title,
+          triggerLabel: versionTypeRaw === "IDEA_TEXT" ? "обновил текст" : "добавил новую версию"
+        });
+      }
+
+      if (versionTypeRaw === "RELEASE") {
+        await createReleaseReadyAchievement(tx, {
+          userId: user.id,
+          trackId,
+          title: track.title,
+          sourceDemoId: createdClip.id
+        });
+
+        const formationStage = await tx.pathStage.findFirst({
+          where: { order: 2 },
+          select: { id: true, name: true }
+        });
+        const wasPromoted = await promoteUserToFormationStageIfOnSpark(tx, user.id);
+        if (wasPromoted && formationStage) {
+          await createPathStageReachedAchievement(tx, {
+            userId: user.id,
+            pathStageId: formationStage.id,
+            pathStageName: formationStage.name
+          });
+        }
+      }
+
       return createdClip;
     });
   } catch (error) {
@@ -248,5 +405,14 @@ export const POST = withApiHandler(async (request: Request) => {
     throw error;
   }
 
-  return NextResponse.json(clip, { status: 201 });
+  return NextResponse.json(
+    {
+      ...clip,
+      createdAt: clip.createdAt.toISOString(),
+      releaseDate: clip.releaseDate ? clip.releaseDate.toISOString().slice(0, 10) : null,
+      detectedAt: clip.detectedAt?.toISOString() ?? null,
+      versionReflection: serializeVersionReflection(clip.versionReflection, clip.textNote)
+    },
+    { status: 201 }
+  );
 });

@@ -19,7 +19,16 @@ type NavigationResponse = {
     specialistUserId: string;
     safeId: string;
     nickname: string;
-    category: "PRODUCER" | "AUDIO_ENGINEER" | "RECORDING_STUDIO" | "PROMO_CREW";
+    category:
+      | "PRODUCER"
+      | "AUDIO_ENGINEER"
+      | "RECORDING_STUDIO"
+      | "PROMO_CREW"
+      | "COVER_ARTIST"
+      | "COVER_PHOTOGRAPHER"
+      | "VIDEOGRAPHER"
+      | "CLIP_PRODUCTION_TEAM"
+      | "DESIGNER";
     score: number;
     rationale: string;
     contactTelegram?: string;

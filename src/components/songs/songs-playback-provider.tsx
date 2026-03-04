@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 const GLOBAL_PLAYBACK_SOURCE_ID = "songs-global-player";
 const AUDIO_FOCUS_EVENT = "artsafehub:audio-focus";
@@ -148,7 +148,7 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
     const audio = audioRef.current;
     if (!audio || !activeItem) return;
     audio.play().catch(() => null);
-  }, [activeItem?.demoId]);
+  }, [activeItem]);
 
   useEffect(
     () => () => {
@@ -360,69 +360,38 @@ export function SongsPlaybackProvider({ children }: { children: React.ReactNode 
     setIsPlayerWindowOpen((prev) => !prev);
   }
 
-  const visibleActiveItem = mounted ? activeItem : null;
-  const visibleQueue = mounted ? queue : [];
-  const visibleQueueIndex = mounted ? queueIndex : 0;
-  const visibleQueueContext = mounted ? queueContext : null;
-  const visiblePlaying = mounted ? playing : false;
-  const visibleCurrentTime = mounted ? currentTime : 0;
-  const visibleDuration = mounted ? duration : 0;
-  const visibleRepeatMode = mounted ? repeatMode : "off";
-  const visibleShuffleEnabled = mounted ? shuffleEnabled : false;
-  const visibleCanNext = mounted ? canNext : false;
-  const visibleCanPrevious = mounted ? canPrevious : false;
-  const visiblePlayerWindowOpen = mounted ? isPlayerWindowOpen : false;
-
-  const value = useMemo<SongsPlaybackContextValue>(
-    () => ({
-      activeItem: visibleActiveItem,
-      queue: visibleQueue,
-      queueIndex: visibleQueueIndex,
-      queueContext: visibleQueueContext,
-      playing: visiblePlaying,
-      currentTime: visibleCurrentTime,
-      duration: visibleDuration,
-      repeatMode: visibleRepeatMode,
-      shuffleEnabled: visibleShuffleEnabled,
-      canNext: visibleCanNext,
-      canPrevious: visibleCanPrevious,
-      isPlayerWindowOpen: visiblePlayerWindowOpen,
-      play,
-      playQueue,
-      toggle,
-      pause,
-      next,
-      previous,
-      seek,
-      restart,
-      cycleRepeatMode,
-      toggleShuffle,
-      clear,
-      openPlayerWindow,
-      closePlayerWindow,
-      togglePlayerWindow,
-      getOrCreateAnalyserNode,
-      resumeAnalyserContext,
-      isActive: (demoId: string) => visibleActiveItem?.demoId === demoId,
-      isPlayingDemo: (demoId: string) => visibleActiveItem?.demoId === demoId && visiblePlaying
-    }),
-    [
-      visibleActiveItem,
-      visibleCanNext,
-      visibleCanPrevious,
-      visibleCurrentTime,
-      visibleDuration,
-      visibleRepeatMode,
-      visibleShuffleEnabled,
-      visiblePlayerWindowOpen,
-      visiblePlaying,
-      visibleQueue,
-      visibleQueueContext,
-      visibleQueueIndex,
-      getOrCreateAnalyserNode,
-      resumeAnalyserContext
-    ]
-  );
+  const value: SongsPlaybackContextValue = {
+    activeItem: mounted ? activeItem : null,
+    queue: mounted ? queue : [],
+    queueIndex: mounted ? queueIndex : 0,
+    queueContext: mounted ? queueContext : null,
+    playing: mounted ? playing : false,
+    currentTime: mounted ? currentTime : 0,
+    duration: mounted ? duration : 0,
+    repeatMode: mounted ? repeatMode : "off",
+    shuffleEnabled: mounted ? shuffleEnabled : false,
+    canNext: mounted ? canNext : false,
+    canPrevious: mounted ? canPrevious : false,
+    isPlayerWindowOpen: mounted ? isPlayerWindowOpen : false,
+    play,
+    playQueue,
+    toggle,
+    pause,
+    next,
+    previous,
+    seek,
+    restart,
+    cycleRepeatMode,
+    toggleShuffle,
+    clear,
+    openPlayerWindow,
+    closePlayerWindow,
+    togglePlayerWindow,
+    getOrCreateAnalyserNode,
+    resumeAnalyserContext,
+    isActive: (demoId: string) => (mounted ? activeItem?.demoId === demoId : false),
+    isPlayingDemo: (demoId: string) => (mounted ? activeItem?.demoId === demoId && playing : false)
+  };
 
   return (
     <SongsPlaybackContext.Provider value={value}>

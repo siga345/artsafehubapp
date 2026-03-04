@@ -69,13 +69,13 @@ export function MoveNodeModal({
   const rootDisabledReason = getTargetDisabledReason?.(null) ?? null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 p-3 backdrop-blur-sm md:items-center md:p-6" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 p-3 pt-16 backdrop-blur-sm md:items-center md:p-6" onClick={onClose}>
       <div
         className="w-full max-w-xl rounded-3xl border border-brand-border bg-[#f7fbf2] p-4 shadow-[0_20px_60px_rgba(24,32,27,0.22)]"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-3">
-          <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Move {node.type}</p>
+          <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Перемещение: {node.type === "folder" ? "папка" : "проект"}</p>
           <h3 className="text-lg font-semibold text-brand-ink">{node.title}</h3>
         </div>
 

@@ -35,6 +35,18 @@ type FolderDeletePromptState = {
   title: string;
 };
 
+type ProjectRenamePromptState = {
+  id: string;
+  initialTitle: string;
+  value: string;
+};
+
+type ProjectDeletePromptState = {
+  id: string;
+  title: string;
+  trackCount: number;
+};
+
 type ProjectDetailForPlayback = {
   id: string;
   title: string;
@@ -139,6 +151,9 @@ export function WorkspaceBrowser({
   const [playLoadingProjectId, setPlayLoadingProjectId] = useState("");
   const [moveNode, setMoveNode] = useState<WorkspaceNode | null>(null);
   const [deleteFolderPrompt, setDeleteFolderPrompt] = useState<FolderDeletePromptState | null>(null);
+  const [deleteEmptyFolderPrompt, setDeleteEmptyFolderPrompt] = useState<FolderDeletePromptState | null>(null);
+  const [renameProjectPrompt, setRenameProjectPrompt] = useState<ProjectRenamePromptState | null>(null);
+  const [deleteProjectPrompt, setDeleteProjectPrompt] = useState<ProjectDeletePromptState | null>(null);
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newFolderTitle, setNewFolderTitle] = useState("");
@@ -163,7 +178,7 @@ export function WorkspaceBrowser({
     queryFn: () => fetcher<FolderListItem[]>("/api/folders")
   });
 
-  const nodes = workspace?.nodes ?? [];
+  const nodes = useMemo(() => workspace?.nodes ?? [], [workspace?.nodes]);
   const filteredNodes = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return nodes;
@@ -244,7 +259,7 @@ export function WorkspaceBrowser({
     });
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(body?.error || "Folder action failed");
+      throw new Error(body?.error || "Не удалось выполнить действие с папкой.");
     }
   }
 
@@ -279,15 +294,14 @@ export function WorkspaceBrowser({
     }
   }
 
-  async function renameProject(node: WorkspaceProjectNode) {
-    const nextTitle = window.prompt("Новое название проекта", node.title)?.trim();
-    if (!nextTitle || nextTitle === node.title) return;
-    const key = `project:${node.id}`;
+  async function renameProject(projectId: string, nextTitle: string) {
+    const key = `project:${projectId}`;
     setActionLoadingKey(key);
     setError("");
     setMenuKey("");
     try {
-      await patchProject(node.id, { title: nextTitle });
+      await patchProject(projectId, { title: nextTitle });
+      setRenameProjectPrompt(null);
       await refreshAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось переименовать проект.");
@@ -296,24 +310,21 @@ export function WorkspaceBrowser({
     }
   }
 
-  async function deleteProject(node: WorkspaceProjectNode) {
-    const confirmed = window.confirm(
-      node.projectMeta.trackCount > 0 ? "Удалить проект вместе со всеми песнями и версиями?" : "Удалить пустой проект?"
-    );
-    if (!confirmed) return;
-    const key = `project:${node.id}`;
+  async function deleteProject(projectId: string, trackCount: number) {
+    const key = `project:${projectId}`;
     setActionLoadingKey(key);
     setError("");
     setMenuKey("");
     try {
       const response = await apiFetch(
-        `/api/projects/${node.id}${node.projectMeta.trackCount > 0 ? "?force=1" : ""}`,
+        `/api/projects/${projectId}${trackCount > 0 ? "?force=1" : ""}`,
         { method: "DELETE" }
       );
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(body?.error || "Не удалось удалить проект.");
       }
+      setDeleteProjectPrompt(null);
       await refreshAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось удалить проект.");
@@ -334,6 +345,7 @@ export function WorkspaceBrowser({
         throw new Error(body?.error || "Не удалось очистить папку.");
       }
       setDeleteFolderPrompt(null);
+      setDeleteEmptyFolderPrompt(null);
       await refreshAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось очистить папку.");
@@ -361,6 +373,7 @@ export function WorkspaceBrowser({
         throw new Error(defaultFolderDeleteError(payload));
       }
       setDeleteFolderPrompt(null);
+      setDeleteEmptyFolderPrompt(null);
       await refreshAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось удалить папку.");
@@ -376,9 +389,54 @@ export function WorkspaceBrowser({
       setDeleteFolderPrompt({ id: node.id, title: node.title });
       return;
     }
-    const confirmed = window.confirm("Удалить пустую папку?");
-    if (!confirmed) return;
-    void deleteFolder(node);
+    setDeleteEmptyFolderPrompt({ id: node.id, title: node.title });
+  }
+
+  function requestProjectRename(node: WorkspaceProjectNode) {
+    setError("");
+    setMenuKey("");
+    setRenameProjectPrompt({ id: node.id, initialTitle: node.title, value: node.title });
+  }
+
+  function requestProjectDelete(node: WorkspaceProjectNode) {
+    setError("");
+    setMenuKey("");
+    setDeleteProjectPrompt({
+      id: node.id,
+      title: node.title,
+      trackCount: node.projectMeta.trackCount
+    });
+  }
+
+  function submitProjectRename() {
+    if (!renameProjectPrompt) return;
+    const nextTitle = renameProjectPrompt.value.trim();
+    if (!nextTitle || nextTitle === renameProjectPrompt.initialTitle) {
+      setRenameProjectPrompt(null);
+      return;
+    }
+    void renameProject(renameProjectPrompt.id, nextTitle);
+  }
+
+  function submitProjectDelete() {
+    if (!deleteProjectPrompt) return;
+    void deleteProject(deleteProjectPrompt.id, deleteProjectPrompt.trackCount);
+  }
+
+  function submitEmptyFolderDelete() {
+    if (!deleteEmptyFolderPrompt) return;
+    const fallbackNode: Extract<WorkspaceNode, { type: "folder" }> = {
+      id: deleteEmptyFolderPrompt.id,
+      title: deleteEmptyFolderPrompt.title,
+      type: "folder",
+      pinnedAt: null,
+      updatedAt: new Date().toISOString(),
+      sortIndex: 0,
+      itemCount: 0,
+      preview: []
+    };
+    setDeleteEmptyFolderPrompt(null);
+    void deleteFolder(fallbackNode, "delete");
   }
 
   async function moveCurrentNode(targetFolderId: string | null) {
@@ -508,35 +566,29 @@ export function WorkspaceBrowser({
     <Card
       className={
         className ??
-        "relative overflow-hidden rounded-3xl border border-brand-border bg-gradient-to-br from-[#f4f8ee] via-[#eff4e8] to-[#e8efde] p-0 shadow-[0_18px_46px_rgba(55,74,61,0.14)]"
+        "relative overflow-hidden rounded-[22px] border border-brand-border bg-gradient-to-br from-[#f4f8ee] via-[#eff4e8] to-[#e8efde] p-0 shadow-[0_18px_46px_rgba(55,74,61,0.14)] md:rounded-3xl"
       }
     >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(217,249,157,0.25),transparent_35%),radial-gradient(circle_at_100%_100%,rgba(42,52,44,0.06),transparent_42%)]" />
       {showHeader && (
-        <div className="relative border-b border-brand-border px-4 py-4 md:px-5">
+        <div className="relative border-b border-brand-border px-3 py-3 md:px-5 md:py-4">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(255,255,255,0.45),transparent_38%)]" />
           <div className="relative flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="mb-2 flex flex-wrap items-center gap-2">
-                <Badge className="bg-white">
-                  <span className="-rotate-6 mr-1 inline-flex h-5 w-5 items-center justify-center rounded-md border border-brand-border bg-white shadow-[0_1px_0_rgba(42,52,44,0.08)]">
+                <Badge className="bg-white px-2 py-0.5 text-[11px] md:px-2.5 md:py-1 md:text-xs">
+                  <span className="-rotate-6 mr-1 inline-flex h-4 w-4 items-center justify-center rounded-md border border-brand-border bg-white shadow-[0_1px_0_rgba(42,52,44,0.08)] md:h-5 md:w-5">
                     <Disc3 className="h-3 w-3 text-brand-ink" />
                   </span>
-                  Workspace
+                  Рабочая зона
                 </Badge>
               </div>
-              <h2 className="text-xl font-semibold tracking-tight text-brand-ink">
-                {workspace?.currentFolder?.title ?? "Projects&Folders"}
-              </h2>
-              <p className="mt-1 text-sm text-brand-muted">
-                {levelFolderCount} папок • {levelProjectCount} проектов на текущем уровне
-              </p>
               {workspace?.breadcrumbs?.length ? (
-                <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-brand-muted">
+                <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-brand-muted">
                   {workspace.currentFolder && (
                     <Link
                       href={getWorkspaceHref(workspace.currentFolder.parentFolderId ?? null)}
-                      className="rounded-lg border border-brand-border bg-white/80 px-2 py-1 text-brand-ink hover:bg-white"
+                      className="rounded-lg border border-brand-border bg-white/80 px-2 py-0.5 text-xs text-brand-ink hover:bg-white md:px-2 md:py-1 md:text-sm"
                     >
                       ← Назад
                     </Link>
@@ -547,9 +599,12 @@ export function WorkspaceBrowser({
                       return (
                         <span key={`${crumb.id ?? "root"}:${index}`} className="inline-flex min-w-0 items-center gap-2">
                           {isLast ? (
-                            <span className="max-w-[240px] truncate text-brand-ink">{crumb.title}</span>
+                            <span className="max-w-[220px] truncate text-xs text-brand-ink md:max-w-[240px] md:text-sm">{crumb.title}</span>
                           ) : (
-                            <Link href={getWorkspaceHref(crumb.id)} className="max-w-[180px] truncate hover:text-brand-ink hover:underline">
+                            <Link
+                              href={getWorkspaceHref(crumb.id)}
+                              className="max-w-[160px] truncate text-xs hover:text-brand-ink hover:underline md:max-w-[180px] md:text-sm"
+                            >
                               {crumb.title}
                             </Link>
                           )}
@@ -560,33 +615,39 @@ export function WorkspaceBrowser({
                   </nav>
                 </div>
               ) : null}
+              <h2 className="text-lg font-semibold tracking-tight text-brand-ink md:text-xl">
+                {workspace?.currentFolder?.title ?? "Проекты и папки"}
+              </h2>
+              <p className="mt-1 text-xs text-brand-muted md:text-sm">
+                {levelFolderCount} папок • {levelProjectCount} проектов на текущем уровне
+              </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {showCreateActions && (
                 <>
                   <Button
                     variant="secondary"
-                    className="rounded-xl border-brand-border bg-white/85 text-brand-ink hover:bg-white"
+                    className="h-9 rounded-xl border-brand-border bg-white/85 px-3 text-sm text-brand-ink hover:bg-white md:h-10"
                     onClick={() => setShowCreateFolder((prev) => !prev)}
                   >
                     <FolderOpen className="h-4 w-4" />
-                    + Folder
+                    + Папка
                   </Button>
                   <Button
                     variant="secondary"
-                    className="rounded-xl border-brand-border bg-white/85 text-brand-ink hover:bg-white"
+                    className="h-9 rounded-xl border-brand-border bg-white/85 px-3 text-sm text-brand-ink hover:bg-white md:h-10"
                     onClick={() => openCreateProject("SINGLE")}
                   >
                     <Disc3 className="h-4 w-4" />
-                    + Single
+                    + Сингл
                   </Button>
                   <Button
                     variant="secondary"
-                    className="rounded-xl border-brand-border bg-white/85 text-brand-ink hover:bg-white"
+                    className="h-9 rounded-xl border-brand-border bg-white/85 px-3 text-sm text-brand-ink hover:bg-white md:h-10"
                     onClick={() => openCreateProject("ALBUM")}
                   >
                     <Disc3 className="h-4 w-4" />
-                    + Album
+                    + Альбом
                   </Button>
                 </>
               )}
@@ -601,14 +662,14 @@ export function WorkspaceBrowser({
                   value={localQuery}
                   onChange={(event) => setLocalQuery(event.target.value)}
                   placeholder="Поиск по текущему уровню..."
-                  className="bg-white pl-9"
+                  className="h-10 bg-white pl-9 md:h-11"
                 />
               </label>
               <div className="mt-2 flex flex-wrap gap-2">
-                <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
+                <span className="inline-flex items-center rounded-lg border border-brand-border bg-white/85 px-2 py-0.5 text-[11px] text-brand-muted md:rounded-xl md:px-2.5 md:py-1 md:text-xs">
                   Видно папок: <span className="ml-1 font-medium text-brand-ink">{visibleFolderCount}</span>
                 </span>
-                <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs text-brand-muted">
+                <span className="inline-flex items-center rounded-lg border border-brand-border bg-white/85 px-2 py-0.5 text-[11px] text-brand-muted md:rounded-xl md:px-2.5 md:py-1 md:text-xs">
                   Видно проектов: <span className="ml-1 font-medium text-brand-ink">{visibleProjectCount}</span>
                 </span>
               </div>
@@ -618,42 +679,42 @@ export function WorkspaceBrowser({
           {(showCreateFolder || showCreateProject) && (
             <div className="mt-3 grid gap-2 md:grid-cols-2">
               {showCreateFolder && (
-                <div className="relative overflow-hidden rounded-2xl border border-brand-border bg-white/90 p-3 shadow-sm">
+                <div className="relative overflow-hidden rounded-xl border border-brand-border bg-white/90 p-2.5 shadow-sm md:rounded-2xl md:p-3">
                   <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#d9f99d] to-transparent" />
-                  <p className="mb-2 text-sm font-medium text-brand-ink">Новая папка</p>
+                  <p className="mb-2 text-xs font-medium text-brand-ink md:text-sm">Новая папка</p>
                   <div className="flex gap-2">
                     <Input
                       value={newFolderTitle}
                       onChange={(event) => setNewFolderTitle(event.target.value)}
-                      placeholder="untitled folder"
+                      placeholder="Название папки"
                       className="bg-white"
                     />
-                    <Button className="rounded-xl" onClick={createFolder} disabled={creatingFolder || !newFolderTitle.trim()}>
-                      {creatingFolder ? "..." : "Create"}
+                    <Button className="h-10 rounded-xl px-3 text-sm" onClick={createFolder} disabled={creatingFolder || !newFolderTitle.trim()}>
+                      {creatingFolder ? "..." : "Создать"}
                     </Button>
                   </div>
                 </div>
               )}
               {showCreateProject && (
-                <div className="relative overflow-hidden rounded-2xl border border-brand-border bg-white/90 p-3 shadow-sm">
+                <div className="relative overflow-hidden rounded-xl border border-brand-border bg-white/90 p-2.5 shadow-sm md:rounded-2xl md:p-3">
                   <div className={`pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${newProjectReleaseKind === "SINGLE" ? "from-[#bfdbfe] to-transparent" : "from-[#fda4af] via-[#c4b5fd] to-transparent"}`} />
-                  <p className="mb-1 text-sm font-medium text-brand-ink">
-                    Новый {newProjectReleaseKind === "SINGLE" ? "single" : "album"}
+                  <p className="mb-1 text-xs font-medium text-brand-ink md:text-sm">
+                    Новый {newProjectReleaseKind === "SINGLE" ? "сингл" : "альбом"}
                   </p>
-                  <p className="mb-2 text-xs text-brand-muted">
+                  <p className="mb-2 text-[11px] text-brand-muted md:text-xs">
                     {newProjectReleaseKind === "SINGLE"
-                      ? "Single открывается сразу в версии, когда внутри появится 1 трек."
-                      : "Album сохраняет текущую страницу проекта и плейлист треков."}
+                      ? "Сингл открывается сразу в версии, когда внутри появится 1 трек."
+                      : "Альбом сохраняет текущую страницу проекта и плейлист треков."}
                   </p>
                   <div className="flex gap-2">
                     <Input
                       value={newProjectTitle}
                       onChange={(event) => setNewProjectTitle(event.target.value)}
-                      placeholder={newProjectReleaseKind === "SINGLE" ? "untitled single" : "untitled album"}
+                      placeholder={newProjectReleaseKind === "SINGLE" ? "Название сингла" : "Название альбома"}
                       className="bg-white"
                     />
-                    <Button className="rounded-xl" onClick={createProject} disabled={creatingProject || !newProjectTitle.trim()}>
-                      {creatingProject ? "..." : "Create"}
+                    <Button className="h-10 rounded-xl px-3 text-sm" onClick={createProject} disabled={creatingProject || !newProjectTitle.trim()}>
+                      {creatingProject ? "..." : "Создать"}
                     </Button>
                   </div>
                 </div>
@@ -665,9 +726,9 @@ export function WorkspaceBrowser({
         </div>
       )}
 
-      {!showHeader && error && <div className="p-4 pb-0"><p className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</p></div>}
+      {!showHeader && error && <div className="p-3 pb-0 md:p-4 md:pb-0"><p className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</p></div>}
 
-      <div className="relative p-4 md:p-5">
+      <div className="relative p-3 md:p-5">
         {workspaceLoading ? (
           <div className="rounded-2xl border border-brand-border bg-white/70 p-4 text-sm text-brand-muted shadow-sm">Загрузка workspace...</div>
         ) : (
@@ -697,7 +758,7 @@ export function WorkspaceBrowser({
                             void togglePin(node);
                           }}
                         >
-                          {node.pinnedAt ? "Unpin folder" : "Pin folder"}
+                          {node.pinnedAt ? "Открепить папку" : "Закрепить папку"}
                         </button>
                         <button
                           type="button"
@@ -709,7 +770,7 @@ export function WorkspaceBrowser({
                             setMenuKey("");
                           }}
                         >
-                          Move folder
+                          Переместить папку
                         </button>
                         <button
                           type="button"
@@ -720,7 +781,7 @@ export function WorkspaceBrowser({
                             void emptyFolder(node.id);
                           }}
                         >
-                          Empty folder
+                          Очистить папку
                         </button>
                         <div className="my-1 h-px bg-black/5" />
                         <button
@@ -732,7 +793,7 @@ export function WorkspaceBrowser({
                             requestDeleteFolder(node);
                           }}
                         >
-                          Delete folder
+                          Удалить папку
                         </button>
                       </>
                     ) : (
@@ -749,7 +810,7 @@ export function WorkspaceBrowser({
                             setMenuKey("");
                           }}
                         >
-                          Open
+                          Открыть
                         </Link>
                         <button
                           type="button"
@@ -760,7 +821,7 @@ export function WorkspaceBrowser({
                             void togglePin(node);
                           }}
                         >
-                          {node.pinnedAt ? "Unpin project" : "Pin project"}
+                          {node.pinnedAt ? "Открепить проект" : "Закрепить проект"}
                         </button>
                         <button
                           type="button"
@@ -772,7 +833,7 @@ export function WorkspaceBrowser({
                             setMenuKey("");
                           }}
                         >
-                          Move project
+                          Переместить проект
                         </button>
                         <button
                           type="button"
@@ -780,10 +841,10 @@ export function WorkspaceBrowser({
                           onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
-                            void renameProject(node);
+                            requestProjectRename(node);
                           }}
                         >
-                          Rename project
+                          Переименовать проект
                         </button>
                         <div className="my-1 h-px bg-black/5" />
                         <button
@@ -792,10 +853,10 @@ export function WorkspaceBrowser({
                           onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
-                            void deleteProject(node);
+                            requestProjectDelete(node);
                           }}
                         >
-                          Delete project
+                          Удалить проект
                         </button>
                       </>
                     )}
@@ -876,6 +937,105 @@ export function WorkspaceBrowser({
           void deleteFolder(node, "delete_all");
         }}
       />
+
+      {deleteEmptyFolderPrompt && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 p-3 pt-16 backdrop-blur-sm md:items-center md:p-6"
+          onClick={() => {
+            if (actionLoadingKey) return;
+            setDeleteEmptyFolderPrompt(null);
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-brand-border bg-[#f7fbf2] p-4 shadow-[0_20px_60px_rgba(24,32,27,0.22)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-brand-ink">Удалить папку?</h3>
+            <p className="mt-2 text-sm text-brand-muted">
+              Папка <span className="font-medium text-brand-ink">«{deleteEmptyFolderPrompt.title}»</span> пустая. Подтверди удаление.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => setDeleteEmptyFolderPrompt(null)}
+                disabled={Boolean(actionLoadingKey)}
+              >
+                Отмена
+              </Button>
+              <Button onClick={submitEmptyFolderDelete} disabled={Boolean(actionLoadingKey)}>
+                {actionLoadingKey === `folder:${deleteEmptyFolderPrompt.id}` ? "Удаляем..." : "Удалить"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {renameProjectPrompt && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 p-3 pt-16 backdrop-blur-sm md:items-center md:p-6"
+          onClick={() => {
+            if (actionLoadingKey) return;
+            setRenameProjectPrompt(null);
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-brand-border bg-[#f7fbf2] p-4 shadow-[0_20px_60px_rgba(24,32,27,0.22)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-brand-ink">Переименовать проект</h3>
+            <p className="mt-2 text-sm text-brand-muted">Новое название проекта:</p>
+            <Input
+              value={renameProjectPrompt.value}
+              onChange={(event) =>
+                setRenameProjectPrompt((prev) => (prev ? { ...prev, value: event.target.value } : prev))
+              }
+              className="mt-3 bg-white"
+              autoFocus
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setRenameProjectPrompt(null)} disabled={Boolean(actionLoadingKey)}>
+                Отмена
+              </Button>
+              <Button
+                onClick={submitProjectRename}
+                disabled={Boolean(actionLoadingKey) || !renameProjectPrompt.value.trim()}
+              >
+                {actionLoadingKey === `project:${renameProjectPrompt.id}` ? "Сохраняем..." : "Сохранить"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteProjectPrompt && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 p-3 pt-16 backdrop-blur-sm md:items-center md:p-6"
+          onClick={() => {
+            if (actionLoadingKey) return;
+            setDeleteProjectPrompt(null);
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-brand-border bg-[#f7fbf2] p-4 shadow-[0_20px_60px_rgba(24,32,27,0.22)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-brand-ink">Удалить проект?</h3>
+            <p className="mt-2 text-sm text-brand-muted">
+              {deleteProjectPrompt.trackCount > 0
+                ? `Проект «${deleteProjectPrompt.title}» будет удален вместе со всеми песнями и версиями.`
+                : `Проект «${deleteProjectPrompt.title}» пустой и будет удален.`}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setDeleteProjectPrompt(null)} disabled={Boolean(actionLoadingKey)}>
+                Отмена
+              </Button>
+              <Button onClick={submitProjectDelete} disabled={Boolean(actionLoadingKey)}>
+                {actionLoadingKey === `project:${deleteProjectPrompt.id}` ? "Удаляем..." : "Удалить"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
