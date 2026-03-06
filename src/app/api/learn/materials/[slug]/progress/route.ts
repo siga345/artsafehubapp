@@ -46,7 +46,7 @@ export const POST = withApiHandler(async (request: Request, context: { params: {
     throw apiError(403, "Forbidden");
   }
 
-  const material = getLearnMaterialRecordBySlug(context.params.slug);
+  const material = await getLearnMaterialRecordBySlug(prisma, context.params.slug);
   if (!material) {
     throw apiError(404, "Resource not found");
   }

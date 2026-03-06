@@ -48,7 +48,7 @@ function downsampleLinear(input: Float32Array, sourceRate: number, targetRate: n
   return { data: out, sampleRate: targetRate };
 }
 
-function estimateBpm(mono: Float32Array, sampleRate: number) {
+export function estimateBpm(mono: Float32Array, sampleRate: number) {
   const target = downsampleLinear(mono, sampleRate, 11025);
   const frameSize = 512;
   const frameCount = Math.max(0, Math.floor(target.data.length / frameSize));
@@ -133,7 +133,7 @@ function dot(a: number[], b: number[]) {
   return sum;
 }
 
-function estimateKey(mono: Float32Array, sampleRate: number) {
+export function estimateKey(mono: Float32Array, sampleRate: number) {
   const target = downsampleLinear(mono, sampleRate, 11025);
   const frameSize = 4096;
   const hop = 2048;

@@ -12,7 +12,7 @@ import { buildDiagnostics, ensureTodayFocus, getPrimaryGoalDetail, todayToDateOn
 import { getWeekStart } from "@/lib/artist-growth";
 import { getDayLoopOverview, listActiveWorkshopTracks } from "@/lib/day-loop";
 import { feedbackRequestSummarySelect, buildTrackFeedbackSummary } from "@/lib/feedback";
-import { LEARN_MOCK_MATERIALS, type LearnMaterialRecord } from "@/lib/learn/mock-materials";
+import { getAllLearnMaterialRecords, type LearnMaterialRecord } from "@/lib/learn/repository";
 import { getLearnMatchReasonLabel } from "@/lib/learn/providers";
 import { getLearnProgressMap, serializeLearnProgress, type LearnProgressRecord } from "@/lib/learn/progress";
 import { materialRecordToPublicItem } from "@/lib/learn/repository";
@@ -291,18 +291,19 @@ function buildContextBlock(
 }
 
 function pickFallbackMaterials(
+  allMaterials: LearnMaterialRecord[],
   context: ResolvedLearnContext,
   progressMap: Map<string, LearnProgressRecord>,
   limit: number
 ): Array<Pick<LearnMaterialCandidate, "material" | "progress" | "matchReasons">> {
-  const featuredStageMatches = LEARN_MOCK_MATERIALS.filter((material) => {
+  const featuredStageMatches = allMaterials.filter((material) => {
     if (!material.isFeatured) return false;
     if (!context.stageOrder || !material.workflow.stageOrders.includes(context.stageOrder)) return false;
     return scoreMaterial(material, context, progressMap.get(material.id)) !== null;
   }).sort((left, right) => left.sortOrder - right.sortOrder);
 
   const unseenFeaturedStageMatches = featuredStageMatches.filter((material) => !progressMap.get(material.id)?.status);
-  const genericFeatured = LEARN_MOCK_MATERIALS.filter((material) => {
+  const genericFeatured = allMaterials.filter((material) => {
     if (!material.isFeatured) return false;
     return scoreMaterial(material, context, progressMap.get(material.id)) !== null;
   }).sort((left, right) => left.sortOrder - right.sortOrder);
@@ -607,7 +608,10 @@ export async function getLearnContextBlock(
   }
 ) {
   const limit = Math.max(1, Math.min(6, input.limit ?? 3));
-  const progressMap = await getLearnProgressMap(db, userId);
+  const [allMaterials, progressMap] = await Promise.all([
+    getAllLearnMaterialRecords(db),
+    getLearnProgressMap(db, userId)
+  ]);
   const excludeMaterialIds = new Set(input.excludeMaterialIds ?? []);
 
   const context =
@@ -617,7 +621,7 @@ export async function getLearnContextBlock(
         ? await resolveGoalsContext(db, userId, input.goalId, excludeMaterialIds)
         : await resolveSongsContext(db, userId, input.trackId, excludeMaterialIds);
 
-  const scored = LEARN_MOCK_MATERIALS.map((material) => scoreMaterial(material, context, progressMap.get(material.id)))
+  const scored = allMaterials.map((material) => scoreMaterial(material, context, progressMap.get(material.id)))
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
     .sort(compareCandidates);
 
@@ -625,7 +629,7 @@ export async function getLearnContextBlock(
     .filter((item) => item.score > 0)
     .slice(0, limit);
   if (selected.length === 0) {
-    selected = pickFallbackMaterials(context, progressMap, limit);
+    selected = pickFallbackMaterials(allMaterials, context, progressMap, limit);
   }
 
   return buildContextBlock(context, selected);

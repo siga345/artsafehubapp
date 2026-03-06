@@ -93,7 +93,7 @@ export type ArtistWorldReferenceInput = {
   imageUrl?: string | null;
 };
 
-type ArtistWorldInput = {
+export type ArtistWorldInput = {
   identityStatement?: string | null;
   mission?: string | null;
   philosophy?: string | null;

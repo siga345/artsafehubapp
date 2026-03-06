@@ -333,6 +333,24 @@ enum LearnApplicationTargetType {
   GOAL
 }
 
+enum LearnMaterialType {
+  VIDEO
+  ARTICLE
+}
+
+enum LearnProvider {
+  YOUTUBE
+  VIMEO
+  WEB
+}
+
+enum LearnProblemType {
+  DIRECTION
+  MOMENTUM
+  FEEDBACK
+  RELEASE_PLANNING
+}
+
 enum TrackDecisionType {
   NEXT_STEP_SET
   NEXT_STEP_COMPLETED
@@ -1238,4 +1256,34 @@ model FeaturedCreator {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([isActive, sortIndex])
+}
+
+model LearnMaterial {
+  id                String                @id
+  slug              String                @unique
+  type              LearnMaterialType
+  title             String
+  authorName        String
+  sourceName        String
+  summary           String
+  thumbnailUrl      String
+  tags              String[]
+  sourceUrl         String
+  language          String
+  durationMinutes   Int?
+  readingMinutes    Int?
+  provider          LearnProvider
+  embedUrl          String?
+  isFeatured        Boolean               @default(false)
+  sortOrder         Int                   @default(0)
+  stageOrders       Int[]
+  goalTypes         ArtistGoalType[]
+  trackStates       TrackWorkbenchState[]
+  problemTypes      LearnProblemType[]
+  preferredSurfaces LearnContextSurface[]
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@index([isFeatured, sortOrder])
+  @@index([type])
 }
