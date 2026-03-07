@@ -61,8 +61,8 @@ function makeGoal(overrides: Partial<{
     type: overrides.type ?? ArtistGoalType.ALBUM_RELEASE,
     status: ArtistGoalStatus.ACTIVE,
     isPrimary: true,
-    successDefinition: overrides.successDefinition ?? "Release the album",
-    targetDate: overrides.targetDate ?? new Date("2027-01-01"),
+    successDefinition: "successDefinition" in overrides ? overrides.successDefinition : "Release the album",
+    targetDate: "targetDate" in overrides ? overrides.targetDate : new Date("2027-01-01"),
     whyNow: null,
     createdFromPathStageId: null,
     createdFromPathStage: null,
@@ -153,11 +153,25 @@ describe("buildDiagnostics — ARTIST_WORLD", () => {
     expect(world?.state).toBe("MISSING");
   });
 
-  it("returns IN_PROGRESS when some identity fields are filled", () => {
+  // Thresholds: 0 → MISSING; 1-2 → WEAK; 3-6 (or missing core) → IN_PROGRESS; 7+ with core → STRONG
+  it("returns WEAK when 1-2 identity fields are filled", () => {
     const profile: ArtistWorldInput = { identityStatement: "I am a pop artist", mission: "Make people dance" };
     const result = buildDiagnostics({ ...defaultInput, goal: null, identityProfile: profile });
     const world = result.find((d) => d.factor === "ARTIST_WORLD");
-    expect(["IN_PROGRESS", "STRONG"]).toContain(world?.state);
+    expect(world?.state).toBe("WEAK");
+  });
+
+  it("returns IN_PROGRESS when 3+ fields filled but core fields incomplete", () => {
+    // 4 fields; missing coreThemes and visualDirection → hasCoreFields=false → IN_PROGRESS
+    const profile: ArtistWorldInput = {
+      identityStatement: "I am a pop artist",
+      mission: "Make people dance",
+      philosophy: "Music heals the soul",
+      audienceCore: "Young adults 18-25",
+    };
+    const result = buildDiagnostics({ ...defaultInput, goal: null, identityProfile: profile });
+    const world = result.find((d) => d.factor === "ARTIST_WORLD");
+    expect(world?.state).toBe("IN_PROGRESS");
   });
 });
 

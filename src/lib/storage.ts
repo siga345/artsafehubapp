@@ -2,6 +2,9 @@ import { randomUUID } from "crypto";
 import path from "path";
 import { promises as fs } from "fs";
 
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
+
 export const MAX_AUDIO_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
 export const ALLOWED_AUDIO_MIME_TYPES = new Set([
   "audio/mpeg",
@@ -18,6 +21,7 @@ export const ALLOWED_AUDIO_MIME_TYPES = new Set([
 
 export interface StorageProvider {
   saveFile(options: { buffer: Buffer; filename: string }): Promise<{ storageKey: string }>;
+  getSignedUrl(storageKey: string, expiresIn?: number): Promise<string>;
 }
 
 export class LocalStorageProvider implements StorageProvider {
@@ -36,14 +40,72 @@ export class LocalStorageProvider implements StorageProvider {
     await fs.writeFile(filePath, buffer);
     return { storageKey };
   }
+
+  async getSignedUrl(storageKey: string): Promise<string> {
+    return `/api/uploads/${storageKey}`;
+  }
 }
 
 export class S3StorageProvider implements StorageProvider {
-  async saveFile(_: { buffer: Buffer; filename: string }): Promise<{ storageKey: string }> {
-    throw new Error(
-      "S3 adapter is not wired yet. Implement upload in your infrastructure module and keep the StorageProvider contract."
+  private client: S3Client;
+  private bucket: string;
+
+  constructor() {
+    this.bucket = process.env.S3_BUCKET!;
+    this.client = new S3Client({
+      region: process.env.S3_REGION ?? "us-east-1",
+      ...(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
+        ? {
+            credentials: {
+              accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+              secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+            }
+          }
+        : {})
+    });
+  }
+
+  async saveFile({ buffer, filename }: { buffer: Buffer; filename: string }): Promise<{ storageKey: string }> {
+    const storageKey = createStorageKey(filename);
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: storageKey,
+        Body: buffer,
+        ContentType: contentTypeFromFilename(filename)
+      })
+    );
+    return { storageKey };
+  }
+
+  async getSignedUrl(storageKey: string, expiresIn = 3600): Promise<string> {
+    return awsGetSignedUrl(
+      this.client,
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: storageKey
+      }),
+      { expiresIn }
     );
   }
+}
+
+function contentTypeFromFilename(filename: string): string {
+  const ext = path.extname(filename).toLowerCase();
+  const map: Record<string, string> = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".aac": "audio/aac",
+    ".webm": "audio/webm",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif"
+  };
+  return map[ext] ?? "application/octet-stream";
 }
 
 export function assertValidAudioUpload(options: { mimeType: string; sizeBytes: number }) {
@@ -73,7 +135,7 @@ function createStorageKey(filename: string) {
   return path.posix.join(year, month, day, `${randomUUID()}-${normalized}`);
 }
 
-function createStorageProvider() {
+function createStorageProvider(): StorageProvider {
   const driver = process.env.STORAGE_DRIVER?.toLowerCase();
   if (driver === "s3") {
     return new S3StorageProvider();

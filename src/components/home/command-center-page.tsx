@@ -22,12 +22,10 @@ import type { RecommendationCard as RecommendationCardData } from "@/contracts/r
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { LegacyTodayPage } from "@/components/home/legacy-today-page";
 import { LearnContextCard, type LearnContextCardAction } from "@/components/learn/learn-context-card";
 import { TodayCoreLoop, type TodayCoreLoopData } from "@/components/home/today-core-loop";
 import { InlineActionMessage } from "@/components/ui/inline-action-message";
 import { Input } from "@/components/ui/input";
-import { OverlayPortal } from "@/components/ui/overlay-portal";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
@@ -558,7 +556,7 @@ export function CommandCenterPage() {
   const [taskLinkOpenById, setTaskLinkOpenById] = useState<Record<string, boolean>>({});
   const [taskLinkDraftById, setTaskLinkDraftById] = useState<Record<string, TaskLinkState>>({});
   const [actionError, setActionError] = useState("");
-  const [isPathOverlayOpen, setIsPathOverlayOpen] = useState(false);
+
 
   const {
     data,
@@ -597,19 +595,6 @@ export function CommandCenterPage() {
     queryFn: () => fetcher<GoalDetail>(`/api/goals/${primaryGoalId}`),
     enabled: Boolean(primaryGoalId)
   });
-
-  useEffect(() => {
-    if (!isPathOverlayOpen) return;
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsPathOverlayOpen(false);
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isPathOverlayOpen]);
 
   async function refreshAll() {
     await Promise.all([refetchOverview(), refetchGoals(), primaryGoalId ? refetchGoalDetail() : Promise.resolve()]);
@@ -931,13 +916,9 @@ export function CommandCenterPage() {
                 {artistName}
               </p>
 
-              <button
-                type="button"
-                onClick={() => setIsPathOverlayOpen(true)}
-                className="mt-4 rounded-full border border-white/18 bg-white/10 px-5 py-2.5 text-sm font-medium text-white/92 backdrop-blur-md transition hover:bg-white/16 md:text-base"
-              >
+              <div className="mt-4 rounded-full border border-white/18 bg-white/10 px-5 py-2.5 text-sm font-medium text-white/92 backdrop-blur-md">
                 PATH этап: {data.stage.order}. {data.stage.name}
-              </button>
+              </div>
 
               <p className="mt-3 max-w-xl text-sm text-white/76 md:text-base">{artistIdentity}</p>
             </div>
@@ -1063,21 +1044,10 @@ export function CommandCenterPage() {
                 <CardDescription>{data.stage.description}</CardDescription>
               </CardHeader>
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-2xl border border-brand-border bg-white/80 p-4">
-                  <p className="text-xs uppercase tracking-[0.14em] text-brand-muted">Ритм недели</p>
-                  <p className="mt-2 text-sm font-medium text-brand-ink">{data.weeklyActiveDays} / 7 активных дней</p>
-                  <p className="mt-1 text-sm text-brand-muted">{getWeeklyRhythmMessage(data.weeklyActiveDays)}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsPathOverlayOpen(true)}
-                  className="rounded-2xl border border-brand-border bg-white/80 p-4 text-left transition hover:bg-[#f7fbf2]"
-                >
-                  <p className="text-xs uppercase tracking-[0.14em] text-brand-muted">Подробный PATH</p>
-                  <p className="mt-2 text-sm font-medium text-brand-ink">Открыть экран пути</p>
-                  <p className="mt-1 text-sm text-brand-muted">Детальный экран с этапом, ритмом и микро-шагом.</p>
-                </button>
+              <div className="rounded-2xl border border-brand-border bg-white/80 p-4">
+                <p className="text-xs uppercase tracking-[0.14em] text-brand-muted">Ритм недели</p>
+                <p className="mt-2 text-sm font-medium text-brand-ink">{data.weeklyActiveDays} / 7 активных дней</p>
+                <p className="mt-1 text-sm text-brand-muted">{getWeeklyRhythmMessage(data.weeklyActiveDays)}</p>
               </div>
 
               {biggestRisk ? (
@@ -1823,25 +1793,6 @@ export function CommandCenterPage() {
           </div>
         </Card>
       </div>
-
-      {isPathOverlayOpen ? (
-        <OverlayPortal>
-          <div
-            className="fixed inset-0 z-50 bg-black/45 p-3 pt-16 backdrop-blur-sm md:p-6"
-            onClick={() => setIsPathOverlayOpen(false)}
-            role="dialog"
-            aria-modal="true"
-            aria-label="PATH"
-          >
-            <div
-              className="mx-auto flex max-h-[88vh] w-full max-w-6xl justify-center overflow-y-auto"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <LegacyTodayPage />
-            </div>
-          </div>
-        </OverlayPortal>
-      ) : null}
 
       {todayFocus?.isCompleted ? (
         <div className="rounded-2xl border border-emerald-300/60 bg-[#edf8f0] p-4 text-[#2c6a40]">

@@ -2,16 +2,13 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { Bell, BookOpen, Home, MessageCircle, Music2, Search, UserCircle2, UsersRound } from "lucide-react";
+import { Bell, BookOpen, Home, Music2, Search, UserCircle2, UsersRound } from "lucide-react";
 import { useSession } from "next-auth/react";
 import { usePathname } from "next/navigation";
 
-import { LegacyTodayPage } from "@/components/home/legacy-today-page";
 import { SongsFullPlayerModal } from "@/components/songs/songs-full-player-modal";
 import { SongsMiniPlayerDock } from "@/components/songs/songs-mini-player-dock";
 import { SongsPlaybackProvider } from "@/components/songs/songs-playback-provider";
-import { OverlayPortal } from "@/components/ui/overlay-portal";
 import { cn } from "@/lib/utils";
 
 const navLinks = [
@@ -26,11 +23,9 @@ const navLinks = [
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { data: session } = useSession();
-  const [isLegacyTodayOpen, setIsLegacyTodayOpen] = useState(false);
   const isSignInRoute = pathname === "/signin";
   const showBottomNav = !isSignInRoute;
   const isSongsRoute = pathname === "/songs" || pathname.startsWith("/songs/");
-  const commandCenterEnabled = process.env.NEXT_PUBLIC_COMMAND_CENTER_ENABLED === "true";
   const visibleNavLinks = navLinks.filter((link) => {
     if (link.href !== "/learn") return true;
     return session?.user?.role === "ARTIST";
@@ -39,19 +34,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   function isActiveLink(href: string) {
     return pathname === href || pathname.startsWith(`${href}/`);
   }
-
-  useEffect(() => {
-    if (!isLegacyTodayOpen) return;
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsLegacyTodayOpen(false);
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isLegacyTodayOpen]);
 
   return (
     <SongsPlaybackProvider>
@@ -91,25 +73,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 >
                   <Bell className="h-4 w-4 md:h-4 md:w-4" />
                 </button>
-                {commandCenterEnabled ? (
-                  <button
-                    type="button"
-                    className="app-pill grid h-9 w-9 place-items-center overflow-hidden hover:bg-[#e7eee0] md:h-10 md:w-10"
-                    aria-label="Открыть старую версию Today"
-                    title="Старая версия Today"
-                    onClick={() => setIsLegacyTodayOpen(true)}
-                  >
-                    <span className="grid h-7 w-7 place-items-center overflow-hidden rounded-full bg-white md:h-8 md:w-8">
-                      <Image
-                        src="/images/background-removed-toolpix%201.png"
-                        alt="Legacy Today"
-                        width={32}
-                        height={32}
-                        className="h-6 w-6 object-cover md:h-7 md:w-7"
-                      />
-                    </span>
-                  </button>
-                ) : null}
                 <Link
                   href="/assistant"
                   className="app-pill grid h-9 w-9 place-items-center hover:bg-[#e7eee0] md:h-10 md:w-10"
@@ -145,25 +108,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <>
             <SongsMiniPlayerDock />
             <SongsFullPlayerModal />
-            {isLegacyTodayOpen ? (
-              <OverlayPortal>
-                <div
-                  className="fixed inset-0 z-50 bg-black/45 p-3 pt-16 backdrop-blur-sm md:p-6"
-                  onClick={() => setIsLegacyTodayOpen(false)}
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label="Старая версия Today"
-                >
-                  <div
-                    className="mx-auto flex max-h-[88vh] w-full max-w-6xl justify-center overflow-y-auto"
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <LegacyTodayPage />
-                  </div>
-                </div>
-              </OverlayPortal>
-            ) : null}
-
             <div
               className={cn(
                 "fixed inset-x-0 hidden px-4 md:block",

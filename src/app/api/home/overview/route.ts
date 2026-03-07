@@ -43,38 +43,6 @@ const stageFallback = {
   description: defaultStage?.description ?? "Творческий порыв"
 };
 
-function isMissingTableError(error: unknown, tableName: string) {
-  if (!(error instanceof Error)) return false;
-  const message = error.message.toLowerCase();
-  return message.includes("does not exist in the current database") && message.includes(tableName.toLowerCase());
-}
-
-async function getOnboardingStateSafe(userId: string) {
-  try {
-    return await prisma.userOnboardingState.findUnique({
-      where: { userId }
-    });
-  } catch (error) {
-    if (isMissingTableError(error, "useronboardingstate")) {
-      return null;
-    }
-    throw error;
-  }
-}
-
-async function getRequestCountSafe(userId: string) {
-  try {
-    return await prisma.inAppRequest.count({
-      where: { artistUserId: userId }
-    });
-  } catch (error) {
-    if (isMissingTableError(error, "inapprequest")) {
-      return 0;
-    }
-    throw error;
-  }
-}
-
 async function getCommandCenterDataSafe(input: {
   userId: string;
   today: Date;
@@ -84,69 +52,53 @@ async function getCommandCenterDataSafe(input: {
   projectCount: number;
   requestCount: number;
 }) {
-  const enabled = process.env.NEXT_PUBLIC_COMMAND_CENTER_ENABLED === "true";
-  if (!enabled) return null;
-
-  try {
-    const weekStartDate = getCommandCenterWeekStart(input.today);
-    const [identityProfile, primaryGoal, completedFocusCount] = await Promise.all([
-      getIdentityProfile(prisma, input.userId),
-      getPrimaryGoalDetail(prisma, input.userId),
-      prisma.dailyFocus.count({
-        where: {
-          userId: input.userId,
-          isCompleted: true,
-          date: {
-            gte: weekStartDate,
-            lte: input.today
-          }
+  const weekStartDate = getCommandCenterWeekStart(input.today);
+  const [identityProfile, primaryGoal, completedFocusCount] = await Promise.all([
+    getIdentityProfile(prisma, input.userId),
+    getPrimaryGoalDetail(prisma, input.userId),
+    prisma.dailyFocus.count({
+      where: {
+        userId: input.userId,
+        isCompleted: true,
+        date: {
+          gte: weekStartDate,
+          lte: input.today
         }
-      })
-    ]);
+      }
+    })
+  ]);
 
-    const [todayFocus, trajectoryReview] = primaryGoal
-      ? await Promise.all([
-          ensureTodayFocus(prisma, input.userId, input.today, primaryGoal),
-          getGoalTrajectoryReview(prisma, input.userId, primaryGoal, input.today)
-        ])
-      : [null, null];
-    const diagnostics = buildDiagnostics({
-      goal: primaryGoal,
-      trajectoryReview,
-      identityProfile,
-      weeklyActiveDays: input.weeklyActiveDays,
-      hasCheckIn: input.checkInExists,
-      completedFocusCount,
-      requestCount: input.requestCount,
-      trackCount: input.trackCount,
-      projectCount: input.projectCount
-    });
-    const biggestRisk = diagnostics.find((item) => item.state !== "STRONG") ?? diagnostics[0] ?? null;
+  const [todayFocus, trajectoryReview] = primaryGoal
+    ? await Promise.all([
+        ensureTodayFocus(prisma, input.userId, input.today, primaryGoal),
+        getGoalTrajectoryReview(prisma, input.userId, primaryGoal, input.today)
+      ])
+    : [null, null];
+  const diagnostics = buildDiagnostics({
+    goal: primaryGoal,
+    trajectoryReview,
+    identityProfile,
+    weeklyActiveDays: input.weeklyActiveDays,
+    hasCheckIn: input.checkInExists,
+    completedFocusCount,
+    requestCount: input.requestCount,
+    trackCount: input.trackCount,
+    projectCount: input.projectCount
+  });
+  const biggestRisk = diagnostics.find((item) => item.state !== "STRONG") ?? diagnostics[0] ?? null;
 
-    return {
-      position: {
-        biggestRisk
-      },
-      primaryGoal: serializePrimaryGoalSummary(primaryGoal, identityProfile, {
-        trajectoryReview
-      }),
-      todayFocus: serializeTodayFocus(primaryGoal, identityProfile, todayFocus, {
-        trajectoryReview
-      }),
-      diagnostics
-    };
-  } catch (error) {
-    if (
-      isMissingTableError(error, "artistgoal") ||
-      isMissingTableError(error, "artistidentityprofile") ||
-      isMissingTableError(error, "dailyfocus") ||
-      isMissingTableError(error, "goalpillar") ||
-      isMissingTableError(error, "goaltask")
-    ) {
-      return null;
-    }
-    throw error;
-  }
+  return {
+    position: {
+      biggestRisk
+    },
+    primaryGoal: serializePrimaryGoalSummary(primaryGoal, identityProfile, {
+      trajectoryReview
+    }),
+    todayFocus: serializeTodayFocus(primaryGoal, identityProfile, todayFocus, {
+      trajectoryReview
+    }),
+    diagnostics
+  };
 }
 
 export const GET = withApiHandler(async () => {
@@ -176,7 +128,7 @@ export const GET = withApiHandler(async () => {
     prisma.weeklyActivity.findUnique({
       where: { userId_weekStartDate: { userId: user.id, weekStartDate } }
     }),
-    getOnboardingStateSafe(user.id),
+    prisma.userOnboardingState.findUnique({ where: { userId: user.id } }),
     prisma.track.count({
       where: { userId: user.id }
     }),
@@ -186,7 +138,7 @@ export const GET = withApiHandler(async () => {
     prisma.project.count({
       where: { userId: user.id }
     }),
-    getRequestCountSafe(user.id),
+    prisma.inAppRequest.count({ where: { artistUserId: user.id } }),
     getDayLoopOverview(prisma, user.id, today)
   ]);
 

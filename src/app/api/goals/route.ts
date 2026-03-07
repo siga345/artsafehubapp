@@ -32,49 +32,36 @@ function parseOptionalDate(value?: string | null) {
   return parsed;
 }
 
-function isMissingTableError(error: unknown, tableName: string) {
-  if (!(error instanceof Error)) return false;
-  const message = error.message.toLowerCase();
-  return message.includes("does not exist in the current database") && message.includes(tableName.toLowerCase());
-}
-
 export const GET = withApiHandler(async () => {
   const user = await requireUser();
   const today = todayToDateOnly(new Date());
 
-  try {
-    const [goals, identityProfile] = await Promise.all([
-      prisma.artistGoal.findMany({
-        where: {
-          userId: user.id
-        },
-        include: goalDetailInclude,
-        orderBy: [{ isPrimary: "desc" }, { updatedAt: "desc" }]
-      }),
-      getIdentityProfile(prisma, user.id)
-    ]);
+  const [goals, identityProfile] = await Promise.all([
+    prisma.artistGoal.findMany({
+      where: {
+        userId: user.id
+      },
+      include: goalDetailInclude,
+      orderBy: [{ isPrimary: "desc" }, { updatedAt: "desc" }]
+    }),
+    getIdentityProfile(prisma, user.id)
+  ]);
 
-    const trajectoryReviews = await Promise.all(
-      goals.map(async (goal) => ({
-        goalId: goal.id,
-        trajectoryReview: await getGoalTrajectoryReview(prisma, user.id, goal, today)
-      }))
-    );
-    const trajectoryByGoalId = new Map(trajectoryReviews.map((item) => [item.goalId, item.trajectoryReview]));
+  const trajectoryReviews = await Promise.all(
+    goals.map(async (goal) => ({
+      goalId: goal.id,
+      trajectoryReview: await getGoalTrajectoryReview(prisma, user.id, goal, today)
+    }))
+  );
+  const trajectoryByGoalId = new Map(trajectoryReviews.map((item) => [item.goalId, item.trajectoryReview]));
 
-    return NextResponse.json({
-      items: goals.map((goal) =>
-        serializeGoalDetail(goal, identityProfile, {
-          trajectoryReview: trajectoryByGoalId.get(goal.id) ?? null
-        })
-      )
-    });
-  } catch (error) {
-    if (isMissingTableError(error, "artistgoal")) {
-      return NextResponse.json({ items: [] });
-    }
-    throw error;
-  }
+  return NextResponse.json({
+    items: goals.map((goal) =>
+      serializeGoalDetail(goal, identityProfile, {
+        trajectoryReview: trajectoryByGoalId.get(goal.id) ?? null
+      })
+    )
+  });
 });
 
 export const POST = withApiHandler(async (request: Request) => {

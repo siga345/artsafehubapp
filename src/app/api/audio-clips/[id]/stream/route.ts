@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { apiError, withApiHandler } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
+import { storageProvider } from "@/lib/storage";
 
 function contentTypeByExt(filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
@@ -49,6 +50,8 @@ function parseRangeHeader(rangeHeader: string, fileSize: number) {
   return { start, end };
 }
 
+const isS3 = process.env.STORAGE_DRIVER?.toLowerCase() === "s3";
+
 export const GET = withApiHandler(async (request: Request, { params }: { params: { id: string } }) => {
   const user = await requireUser();
 
@@ -58,6 +61,11 @@ export const GET = withApiHandler(async (request: Request, { params }: { params:
 
   if (!demo) {
     throw apiError(404, "Demo not found");
+  }
+
+  if (isS3) {
+    const signedUrl = await storageProvider.getSignedUrl(demo.audioUrl);
+    return NextResponse.redirect(signedUrl);
   }
 
   const absolutePath = path.join(process.cwd(), "uploads", demo.audioUrl);
