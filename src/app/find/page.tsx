@@ -25,7 +25,7 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { apiFetch, apiFetchJson, readApiErrorMessage } from "@/lib/client-fetch";
-import { requestActionLabelRu, requestStatusLabelRu, requestTypeLabelRu, type RequestCardDto, type RequestsRoleFilter } from "@/lib/in-app-requests";
+import { requestActionLabelRu, requestStatusLabelRu, requestTypeLabelRu, type RequestCardDto } from "@/lib/in-app-requests";
 
 type Specialist = {
   id: string;
@@ -160,6 +160,7 @@ function resolveRequestTypeByCategory(category: string | undefined) {
 
 export default function FindPage() {
   const toast = useToast();
+  const requestsRole = "ARTIST";
   const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"catalog" | "requests">("catalog");
   const [serviceFilter, setServiceFilter] = useState("ALL");
@@ -179,7 +180,6 @@ export default function FindPage() {
   const [selectedService, setSelectedService] = useState("");
   const [songComment, setSongComment] = useState("");
   const [coverPhotoReferences, setCoverPhotoReferences] = useState("");
-  const [requestsRole, setRequestsRole] = useState<RequestsRoleFilter>("ARTIST");
   const [requestsActionBusyId, setRequestsActionBusyId] = useState("");
 
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -794,14 +794,6 @@ export default function FindPage() {
         <Card className="rounded-2xl p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-semibold text-brand-ink">Центр заявок</h2>
-            <Select
-              value={requestsRole}
-              onChange={(event) => setRequestsRole(event.target.value as RequestsRoleFilter)}
-              className="h-10 min-w-[210px] bg-white"
-            >
-              <option value="ARTIST">Отправленные мной</option>
-              <option value="SPECIALIST">Входящие мне (как специалисту)</option>
-            </Select>
           </div>
 
           {requestsLoading ? (

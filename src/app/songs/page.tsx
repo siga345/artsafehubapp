@@ -10,7 +10,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MultiTrackRecorder } from "@/components/audio/multi-track-recorder";
-import { LearnContextCard, type LearnContextCardAction } from "@/components/learn/learn-context-card";
 import { PlaybackIcon } from "@/components/songs/playback-icon";
 import { SongAnalysisBadges } from "@/components/songs/song-analysis-badges";
 import { SongProjectPickerStep, type ProjectSelectionMode } from "@/components/songs/song-project-picker-step";
@@ -26,8 +25,6 @@ import { useToast } from "@/components/ui/toast";
 import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
 import { appendAudioAnalysisToFormData, detectAudioAnalysisMvp, type UploadAudioAnalysisMeta } from "@/lib/audio/upload-analysis-client";
 import { buildProjectCoverStyle, projectDefaultCoverForKind } from "@/lib/project-cover-style";
-import { fetchLearnContext, postLearnProgress } from "@/lib/learn/client";
-import type { LearnContextBlock } from "@/lib/learn/types";
 import { pickPreferredPlaybackDemo, playbackAccentButtonStyle } from "@/lib/songs-playback-helpers";
 import { getProjectOpenHref, type ProjectReleaseKind } from "@/lib/songs-project-navigation";
 import {
@@ -537,30 +534,6 @@ export default function SongsPage() {
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
       .slice(0, 6);
   }, [filteredTracks]);
-  const workshopTracks = useMemo(() => {
-    return [...(filteredTracks ?? [])]
-      .filter((track) => track.workbenchState !== "DEFERRED" || track.activeNextStep)
-      .sort((left, right) => {
-        const leftHasActive = left.activeNextStep ? 1 : 0;
-        const rightHasActive = right.activeNextStep ? 1 : 0;
-        if (leftHasActive !== rightHasActive) return rightHasActive - leftHasActive;
-        const leftDeferred = left.workbenchState === "DEFERRED" ? 1 : 0;
-        const rightDeferred = right.workbenchState === "DEFERRED" ? 1 : 0;
-        if (leftDeferred !== rightDeferred) return leftDeferred - rightDeferred;
-        return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
-      })
-      .slice(0, 8);
-  }, [filteredTracks]);
-  const learnAnchorTrack = workshopTracks[0] ?? recentTracks[0] ?? null;
-  const { data: songsLearnBlock, refetch: refetchSongsLearn } = useQuery<LearnContextBlock>({
-    queryKey: ["songs-learn-context", learnAnchorTrack?.id ?? "stage-only"],
-    queryFn: () =>
-      fetchLearnContext({
-        surface: "SONGS",
-        trackId: learnAnchorTrack?.id ?? null
-      })
-  });
-
   useEffect(() => {
     if (demoVersionType !== "DEMO" && demoMode === "record") {
       setDemoMode("upload");
@@ -631,47 +604,6 @@ export default function SongsPage() {
     if (!isCreationOverlayOpen || !showMobileQuickAddMenu) return;
     setShowMobileQuickAddMenu(false);
   }, [isCreationOverlayOpen, showMobileQuickAddMenu]);
-
-  async function handleSongsLearnAction(materialSlug: string, action: LearnContextCardAction) {
-    try {
-      if (action.kind === "APPLY_TO_TRACK") {
-        await postLearnProgress(materialSlug, {
-          action: "APPLY",
-          surface: "SONGS",
-          targetType: "TRACK",
-          targetId: action.targetId,
-          recommendationContext: action.recommendationContext
-        });
-        toast.success("Материал привязан к треку.");
-      } else if (action.kind === "APPLY_TO_GOAL") {
-        await postLearnProgress(materialSlug, {
-          action: "APPLY",
-          surface: "SONGS",
-          targetType: "GOAL",
-          targetId: action.targetId,
-          recommendationContext: action.recommendationContext
-        });
-        toast.success("Материал привязан к цели.");
-      } else if (action.kind === "NOT_RELEVANT") {
-        await postLearnProgress(materialSlug, {
-          action: "NOT_RELEVANT",
-          surface: "SONGS",
-          recommendationContext: action.recommendationContext
-        });
-        toast.info("Материал скрыт из контекстной выдачи.");
-      } else {
-        await postLearnProgress(materialSlug, {
-          action: "LATER",
-          surface: "SONGS",
-          recommendationContext: action.recommendationContext
-        });
-        toast.info("Материал отложен на потом.");
-      }
-      await refetchSongsLearn();
-    } catch (error) {
-      setDemoError(error instanceof Error ? error.message : "Не удалось обновить Learn-материал.");
-    }
-  }
 
   function resetDemoComposer() {
     setRecordedMix(null);
@@ -1716,102 +1648,8 @@ export default function SongsPage() {
         </Card>
       ) : null}
 
-	      {activeZone === "workspace" ? (
-	        <div className="space-y-4">
-            <LearnContextCard
-              block={songsLearnBlock ?? null}
-              targetLabelOverride={learnAnchorTrack?.title ?? null}
-              onAction={handleSongsLearnAction}
-            />
-
-	          <Card className="relative overflow-hidden rounded-[22px] border border-brand-border bg-gradient-to-br from-[#f7fbf2] via-[#f1f6ea] to-[#e8f0df] p-0 shadow-[0_18px_46px_rgba(61,84,46,0.12)] md:rounded-3xl">
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(217,249,157,0.28),transparent_36%),radial-gradient(circle_at_100%_100%,rgba(42,52,44,0.06),transparent_42%)]" />
-            <div className="relative border-b border-brand-border px-4 py-4 md:px-5">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="mb-2 inline-flex items-center gap-2 rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">
-                    <Sparkles className="h-3.5 w-3.5 text-brand-ink" />
-                    Активная мастерская
-                  </div>
-                  <h2 className="text-xl font-semibold tracking-tight text-brand-ink">Треки, которые реально двигаются</h2>
-                  <p className="mt-1 text-sm text-brand-muted">
-                    Статус работы, intent и один следующий шаг вместо абстрактного списка файлов.
-                  </p>
-                </div>
-                <span className="inline-flex items-center rounded-xl border border-brand-border bg-white/85 px-3 py-1 text-xs text-brand-muted">
-                  В работе: <span className="ml-1 font-medium text-brand-ink">{workshopTracks.length}</span>
-                </span>
-              </div>
-            </div>
-            <div className="relative p-4 md:p-5">
-              {workshopTracks.length ? (
-                <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-                  {workshopTracks.map((track) => (
-                    <Link key={track.id} href={`/songs/${track.id}`} className="group block">
-                      <div className="h-full rounded-[22px] border border-brand-border bg-white/88 p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="truncate text-base font-semibold text-brand-ink">{track.title}</p>
-                            <p className="mt-1 text-xs text-brand-muted">
-                              {track.project?.title ?? "Без проекта"}
-                              {track.pathStage?.name ? ` • ${track.pathStage.name}` : ""}
-                            </p>
-                          </div>
-                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${getWorkbenchTone(track.workbenchState)}`}>
-                            {track.workbenchStateLabel}
-                          </span>
-                        </div>
-
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <Badge className={getIdentityBridgeTone(track.identityBridge.status)}>
-                            {getIdentityBridgeLabel(track.identityBridge.status)}
-                          </Badge>
-                          <span className="rounded-full border border-brand-border bg-white px-2.5 py-1 text-[11px] text-brand-muted">
-                            {getTrackIdentityPreview(track)}
-                          </span>
-                        </div>
-
-                        <div className="mt-3 space-y-3">
-                          <div className="rounded-2xl border border-brand-border bg-[#f7fbf2] px-3 py-2">
-                            <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Intent</p>
-                            <p className="mt-1 text-sm text-brand-ink">
-                              {track.trackIntent?.summary?.trim() || "Intent еще не описан. Открой трек и зафиксируй, зачем он нужен сейчас."}
-                            </p>
-                          </div>
-
-                          <div className="rounded-2xl border border-brand-border bg-white px-3 py-2">
-                            <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Следующий шаг</p>
-                            <p className="mt-1 text-sm font-medium text-brand-ink">
-                              {track.activeNextStep?.text ?? "Шаг не назначен"}
-                            </p>
-                            {track.activeNextStep?.reason ? (
-                              <p className="mt-1 text-sm text-brand-muted">{track.activeNextStep.reason}</p>
-                            ) : null}
-                          </div>
-
-                          <div className="flex flex-wrap gap-2 text-xs text-brand-muted">
-                            <span className="rounded-full border border-brand-border bg-white px-2.5 py-1">
-                              Последняя версия: {track.latestDemo ? formatDate(track.latestDemo.createdAt) : "нет"}
-                            </span>
-                            <span className="rounded-full border border-brand-border bg-white px-2.5 py-1">
-                              Активность: {formatTrackActivity(track)}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-dashed border-brand-border bg-white/75 px-4 py-8 text-sm text-brand-muted">
-                  По текущим фильтрам нет активной мастерской. Создай трек или сними фильтры сверху.
-                </div>
-              )}
-            </div>
-          </Card>
-
-          <WorkspaceBrowser parentFolderId={null} externalQuery={query} showCreateActions={false} onChanged={refetchWorkspaceSurface} />
-        </div>
+      {activeZone === "workspace" ? (
+        <WorkspaceBrowser parentFolderId={null} externalQuery={query} showCreateActions={false} onChanged={refetchWorkspaceSurface} />
       ) : null}
 
       {activeZone === "archive" ? (

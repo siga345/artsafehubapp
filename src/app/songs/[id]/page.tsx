@@ -8,7 +8,6 @@ import { ArrowLeft, AudioLines, FolderOpen, MoreHorizontal, PlusCircle, RefreshC
 
 import { AudioWaveformPlayer } from "@/components/audio/audio-waveform-player";
 import { MultiTrackRecorder } from "@/components/audio/multi-track-recorder";
-import { LearnContextCard, type LearnContextCardAction } from "@/components/learn/learn-context-card";
 import { RecommendationCard } from "@/components/recommendations/recommendation-card";
 import { PlaybackIcon } from "@/components/songs/playback-icon";
 import { SongAnalysisBadges } from "@/components/songs/song-analysis-badges";
@@ -34,8 +33,6 @@ import { apiFetch, apiFetchJson } from "@/lib/client-fetch";
 import { appendAudioAnalysisToFormData, detectAudioAnalysisMvp } from "@/lib/audio/upload-analysis-client";
 import { buildRecommendationCard } from "@/lib/recommendations";
 import { buildProjectCoverStyle } from "@/lib/project-cover-style";
-import { fetchLearnContext, postLearnProgress } from "@/lib/learn/client";
-import type { LearnContextBlock } from "@/lib/learn/types";
 import { isPlayableDemo, pickPreferredPlaybackDemo, playbackAccentButtonStyle } from "@/lib/songs-playback-helpers";
 import type { IdentityBridgeStatus, TrackIdentityBridge } from "@/lib/id-integration";
 
@@ -516,14 +513,6 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
     queryKey: ["song-track", params.id],
     queryFn: () => fetcher<Track>(`/api/songs/${params.id}`)
   });
-  const { data: learnBlock, refetch: refetchLearnBlock } = useQuery<LearnContextBlock>({
-    queryKey: ["song-track-learn", params.id],
-    queryFn: () =>
-      fetchLearnContext({
-        surface: "SONGS",
-        trackId: params.id
-      })
-  });
   const { data: distributionRequest, refetch: refetchDistributionRequest } = useQuery({
     queryKey: ["song-distribution-request", params.id],
     queryFn: () => fetcher<TrackDistributionRequestDto | null>(`/api/songs/${params.id}/distribution-request`)
@@ -624,47 +613,6 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
       },
       futureAiSlotKey: step.id
     });
-  }
-
-  async function handleLearnAction(materialSlug: string, action: LearnContextCardAction) {
-    try {
-      if (action.kind === "APPLY_TO_TRACK") {
-        await postLearnProgress(materialSlug, {
-          action: "APPLY",
-          surface: "SONGS",
-          targetType: "TRACK",
-          targetId: action.targetId,
-          recommendationContext: action.recommendationContext
-        });
-        toast.success("Материал привязан к треку.");
-      } else if (action.kind === "APPLY_TO_GOAL") {
-        await postLearnProgress(materialSlug, {
-          action: "APPLY",
-          surface: "SONGS",
-          targetType: "GOAL",
-          targetId: action.targetId,
-          recommendationContext: action.recommendationContext
-        });
-        toast.success("Материал привязан к цели.");
-      } else if (action.kind === "NOT_RELEVANT") {
-        await postLearnProgress(materialSlug, {
-          action: "NOT_RELEVANT",
-          surface: "SONGS",
-          recommendationContext: action.recommendationContext
-        });
-        toast.info("Материал скрыт из контекстной выдачи.");
-      } else {
-        await postLearnProgress(materialSlug, {
-          action: "LATER",
-          surface: "SONGS",
-          recommendationContext: action.recommendationContext
-        });
-        toast.info("Материал отложен на потом.");
-      }
-      await refetchLearnBlock();
-    } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Не удалось обновить Learn-материал.");
-    }
   }
 
   useEffect(() => {
@@ -940,6 +888,20 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
     setFeedbackRequestMessage("");
     setFeedbackRequestDemoId("");
     setFeedbackRequestError("");
+  }
+
+  function openCreateFeedbackModal(options?: { type?: FeedbackRequestType; demoId?: string }) {
+    resetFeedbackRequestForm();
+
+    if (options?.type === "TEXT") {
+      setFeedbackRequestType("TEXT");
+      setFeedbackRequestDemoId("");
+    } else {
+      setFeedbackRequestType(options?.type ?? "DEMO");
+      setFeedbackRequestDemoId(options?.demoId ?? "");
+    }
+
+    setShowCreateFeedbackModal(true);
   }
 
   function getReflectionDraft(demo: Demo): ReflectionDraft {
@@ -1905,12 +1867,6 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
 	            </div>
 	          </section>
 
-            <LearnContextCard
-              block={learnBlock ?? null}
-              targetLabelOverride={track.title}
-              onAction={handleLearnAction}
-            />
-
 	          <div className="grid gap-6 xl:grid-cols-[minmax(0,380px)_1fr]">
             <div className="min-w-0 space-y-6">
               {hasMasteredVersion && (
@@ -2174,6 +2130,13 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                                             : "Сделать основной"}
                                     </Button>
                                   )}
+                                  <Button
+                                    variant="secondary"
+	                                  className="max-w-full border-brand-border bg-white text-brand-ink hover:bg-white"
+                                    onClick={() => openCreateFeedbackModal({ demoId: demo.id })}
+                                  >
+                                    Запросить фидбек
+                                  </Button>
                                   <button
                                     type="button"
 	                                    className="grid h-9 w-9 place-items-center rounded-xl border border-brand-border bg-white text-brand-ink hover:bg-white disabled:cursor-not-allowed disabled:opacity-35"
@@ -2375,11 +2338,23 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                               </div>
                             </div>
                           );})
-	                        ) : step.versionType === "IDEA_TEXT" ? (
+		                        ) : step.versionType === "IDEA_TEXT" ? (
 		                          <div className="rounded-2xl border border-brand-border bg-[#fbfdf7] px-3 py-4">
 		                            {track.lyricsText?.trim() ? (
-		                              <div className="space-y-2">
-		                                <p className="text-xs uppercase tracking-[0.12em] text-brand-muted">Текст песни</p>
+		                              <div className="space-y-3">
+		                                <div className="flex flex-wrap items-start justify-between gap-2">
+		                                  <div>
+		                                    <p className="text-xs uppercase tracking-[0.12em] text-brand-muted">Текст песни</p>
+		                                    <p className="mt-1 text-sm text-brand-muted">Снапшот текста можно сразу отправить на отзыв.</p>
+		                                  </div>
+		                                  <Button
+		                                    variant="secondary"
+		                                    className="border-brand-border bg-white text-brand-ink hover:bg-white"
+		                                    onClick={() => openCreateFeedbackModal({ type: "TEXT" })}
+		                                  >
+		                                    Запросить фидбек
+		                                  </Button>
+		                                </div>
 		                                <p className="whitespace-pre-wrap text-sm text-brand-ink">{track.lyricsText}</p>
 		                              </div>
 		                            ) : (
@@ -2395,62 +2370,40 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                     </div>
                   </div>
                 );
-              })}
-                </div>
-              </section>
+	              })}
+	                </div>
 
-              <section className="relative overflow-hidden rounded-[24px] border border-brand-border bg-white/85 p-4 shadow-sm md:p-5">
-                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(238,245,251,0.7),transparent_38%)]" />
-                <div className="relative space-y-3">
-                  <div>
-                    <div className="mb-2 inline-flex items-center gap-2 rounded-xl border border-brand-border bg-white/85 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">
-                      <Sparkles className="h-3.5 w-3.5 text-brand-ink" />
-                      Feedback Layer
-                    </div>
-                    <h2 className="text-xl font-semibold tracking-tight text-brand-ink">Запросить фидбек</h2>
-                    <p className="text-sm text-brand-muted">Зафиксируй запрос, получи ответ и разберись с ним внутри трека.</p>
-                  </div>
-
-                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
-                    <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
-                      <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Текущий статус</p>
-                      <p className="mt-1 text-sm font-medium text-brand-ink">
-                        {track.feedbackSummary.latestStatusLabel ?? "Ещё не запрашивали"}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
-                      <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Открытые пункты</p>
-                      <p className="mt-1 text-sm font-medium text-brand-ink">{track.feedbackSummary.unresolvedItemsCount}</p>
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-brand-border bg-[#eef5fb] p-3 shadow-sm">
-                    <p className="text-sm text-brand-ink">
-                      {track.feedbackSummary.nextVersionItemsCount > 0
-                        ? `${track.feedbackSummary.nextVersionItemsCount} пунктов уже ждут проверки в следующей версии.`
-                        : "Пока нет пунктов, отложенных до следующей версии."}
-                    </p>
-                  </div>
-
-                  <Button
-                    className="w-full"
-                    onClick={() => {
-                      resetFeedbackRequestForm();
-                      setShowCreateFeedbackModal(true);
-                    }}
-                  >
-                    Запросить фидбек
-                  </Button>
-
-                  <div className="border-t border-brand-border pt-3">
-                    <div className="mb-3 flex items-center justify-between gap-2">
+                  <div className="mt-5 border-t border-brand-border pt-4">
+                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <p className="text-sm font-semibold text-brand-ink">Входящие отзывы</p>
-                        <p className="text-xs text-brand-muted">Все запросы и разбор тезисов хранятся внутри этого трека.</p>
+                        <p className="text-xs uppercase tracking-[0.16em] text-brand-muted">Feedback</p>
+                        <h3 className="text-lg font-semibold tracking-tight text-brand-ink">Отзывы по версиям</h3>
+                        <p className="text-sm text-brand-muted">Запрашивай фидбек из карточки версии, а ответы и решения хранятся здесь.</p>
                       </div>
                       <span className="inline-flex rounded-full border border-brand-border bg-white px-2.5 py-1 text-xs text-brand-muted">
                         {feedbackRequests.length}
                       </span>
+                    </div>
+
+                    <div className="mb-3 grid gap-2 sm:grid-cols-3">
+                      <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
+                        <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Текущий статус</p>
+                        <p className="mt-1 text-sm font-medium text-brand-ink">
+                          {track.feedbackSummary.latestStatusLabel ?? "Ещё не запрашивали"}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
+                        <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Открытые пункты</p>
+                        <p className="mt-1 text-sm font-medium text-brand-ink">{track.feedbackSummary.unresolvedItemsCount}</p>
+                      </div>
+                      <div className="rounded-2xl border border-brand-border bg-white/85 p-3 shadow-sm">
+                        <p className="text-[11px] uppercase tracking-[0.12em] text-brand-muted">Следующая версия</p>
+                        <p className="mt-1 text-sm font-medium text-brand-ink">
+                          {track.feedbackSummary.nextVersionItemsCount > 0
+                            ? `${track.feedbackSummary.nextVersionItemsCount} ждут проверки`
+                            : "Пока пусто"}
+                        </p>
+                      </div>
                     </div>
 
                     {feedbackRequests.length ? (
@@ -2673,12 +2626,11 @@ export default function SongDetailPage({ params }: { params: { id: string } }) {
                       </div>
                     ) : (
                       <div className="rounded-2xl border border-dashed border-brand-border bg-[#fbfdf7] px-3 py-5 text-sm text-brand-muted">
-                        Пока нет запросов на фидбек. Здесь появятся входящие отзывы и решения по ним.
+                        Пока нет запросов на фидбек. Запрашивай его прямо из нужной версии песни.
                       </div>
                     )}
                   </div>
-                </div>
-              </section>
+	              </section>
             </div>
       </div>
 

@@ -32,7 +32,6 @@ export async function postLearnProgress(
 export async function fetchLearnContext(
   input: {
     surface: LearnSurface;
-    trackId?: string | null;
     goalId?: string | null;
     limit?: number;
   }
@@ -40,7 +39,6 @@ export async function fetchLearnContext(
   const params = new URLSearchParams({
     surface: input.surface
   });
-  if (input.trackId) params.set("trackId", input.trackId);
   if (input.goalId) params.set("goalId", input.goalId);
   if (typeof input.limit === "number") params.set("limit", String(input.limit));
 

@@ -3,7 +3,12 @@ import { z } from "zod";
 import { ArtistWorldBackgroundMode, ArtistWorldThemePreset } from "@prisma/client";
 
 import { parseJsonBody, withApiHandler } from "@/lib/api";
-import { normalizeArtistWorldPayload, serializeArtistWorld } from "@/lib/artist-growth";
+import {
+  artistWorldBlockIds,
+  ensureArtistWorldVisualBoards,
+  normalizeArtistWorldPayload,
+  serializeArtistWorld
+} from "@/lib/artist-growth";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
 import { apiError } from "@/lib/api";
@@ -55,16 +60,26 @@ const artistWorldReferenceSchema = z.object({
 });
 
 const artistWorldBlockIdSchema = z.enum([
-  "hero",
   "mission",
-  "values",
-  "philosophy",
-  "themes",
-  "visual",
-  "audience",
-  "references",
-  "projects"
+  "identity",
+  "themes_audience",
+  "aesthetics",
+  "fashion",
+  "playlist"
 ]);
+
+const visualBoardImageSchema = z.object({
+  id: z.string().optional(),
+  imageUrl: z.string().min(1).max(500)
+});
+
+const visualBoardSchema = z.object({
+  id: z.string().optional(),
+  slug: z.enum(["aesthetics", "fashion"]),
+  name: z.string().min(1).max(120),
+  sourceUrl: optionalUrlInputSchema,
+  images: z.array(visualBoardImageSchema).max(20).optional()
+});
 
 const idUpdateSchema = z.object({
   nickname: z.string().min(1).max(80).optional(),
@@ -80,10 +95,18 @@ const idUpdateSchema = z.object({
       backgroundColorA: z.string().max(32).optional().nullable(),
       backgroundColorB: z.string().max(32).optional().nullable(),
       backgroundImageUrl: localOrRemoteImageSchema.optional(),
-      blockOrder: z.array(artistWorldBlockIdSchema).max(9).optional(),
-      hiddenBlocks: z.array(artistWorldBlockIdSchema).max(9).optional(),
+      blockOrder: z.array(artistWorldBlockIdSchema).max(artistWorldBlockIds.length).optional(),
+      hiddenBlocks: z.array(artistWorldBlockIdSchema).max(artistWorldBlockIds.length).optional(),
       references: z.array(artistWorldReferenceSchema).max(8).optional(),
-      projects: z.array(artistWorldProjectSchema).max(6).optional()
+      projects: z.array(artistWorldProjectSchema).max(6).optional(),
+      artistName: z.string().max(120).optional().nullable(),
+      artistAge: z.number().int().min(10).max(100).optional().nullable(),
+      artistCity: z.string().max(120).optional().nullable(),
+      favoriteArtists: z.array(z.string().min(1).max(120)).max(3).optional(),
+      lifeValues: z.string().max(600).optional().nullable(),
+      teamPreference: z.enum(["solo", "team", "both"]).optional().nullable(),
+      playlistUrl: optionalUrlInputSchema,
+      visualBoards: z.array(visualBoardSchema).max(2).optional()
     })
     .optional()
 });
@@ -112,50 +135,92 @@ function normalizeOptionalHttpUrl(value: string | null | undefined, fieldLabel: 
   }
 }
 
+const profileSelect = {
+  id: true,
+  safeId: true,
+  nickname: true,
+  avatarUrl: true,
+  links: true,
+  notificationsEnabled: true,
+  demosPrivate: true,
+  identityProfile: true,
+  artistWorldProjects: {
+    orderBy: [{ sortIndex: "asc" as const }, { createdAt: "asc" as const }]
+  },
+  artistWorldReferences: {
+    orderBy: [{ sortIndex: "asc" as const }, { createdAt: "asc" as const }]
+  },
+  artistWorldVisualBoards: {
+    orderBy: [{ sortIndex: "asc" as const }],
+    include: {
+      images: {
+        orderBy: [{ sortIndex: "asc" as const }, { createdAt: "asc" as const }]
+      }
+    }
+  }
+};
+
+type ProfileWithRelations = {
+  identityProfile?: Record<string, unknown> | null;
+  artistWorldReferences?: Array<Record<string, unknown>>;
+  artistWorldProjects?: Array<Record<string, unknown>>;
+  artistWorldVisualBoards?: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    sourceUrl: string | null;
+    images: Array<{ id: string; imageUrl: string }>;
+  }>;
+  [key: string]: unknown;
+};
+
+function buildResponse(profile: ProfileWithRelations) {
+  return {
+    ...profile,
+    artistWorld: {
+      ...serializeArtistWorld({
+        ...(profile.identityProfile ?? {}),
+        references: profile.artistWorldReferences ?? [],
+        projects: profile.artistWorldProjects ?? []
+      }),
+      visualBoards: ensureArtistWorldVisualBoards(profile.artistWorldVisualBoards ?? []).map((board) => ({
+        id: board.id ?? board.slug,
+        slug: board.slug,
+        name: board.name,
+        sourceUrl: board.sourceUrl,
+        images: board.images.map((img) => ({
+          id: img.id ?? `${board.slug}-${img.imageUrl}`,
+          imageUrl: img.imageUrl
+        }))
+      }))
+    }
+  };
+}
+
 export const GET = withApiHandler(async () => {
   const user = await requireUser();
   const profile = await prisma.user.findUnique({
     where: { id: user.id },
-    select: {
-      id: true,
-      safeId: true,
-      nickname: true,
-      avatarUrl: true,
-      links: true,
-      notificationsEnabled: true,
-      demosPrivate: true,
-      identityProfile: true,
-      artistWorldProjects: {
-        orderBy: [{ sortIndex: "asc" }, { createdAt: "asc" }]
-      },
-      artistWorldReferences: {
-        orderBy: [{ sortIndex: "asc" }, { createdAt: "asc" }]
-      }
-    }
+    select: profileSelect
   });
 
-  return NextResponse.json(
-    profile
-      ? {
-          ...profile,
-          artistWorld: serializeArtistWorld({
-            ...(profile.identityProfile ?? {}),
-            references: profile.artistWorldReferences,
-            projects: profile.artistWorldProjects
-          })
-        }
-      : null
-  );
+  if (!profile) return NextResponse.json(null);
+
+  return NextResponse.json(buildResponse(profile));
 });
 
 export const PATCH = withApiHandler(async (request: Request) => {
   const user = await requireUser();
   const body = await parseJsonBody(request, idUpdateSchema);
   const normalizedBandlink = normalizeOptionalHttpUrl(body.bandlink, "Bandlink");
+  const normalizedPlaylistUrl = body.artistWorld?.playlistUrl !== undefined
+    ? normalizeOptionalHttpUrl(body.artistWorld.playlistUrl, "Плейлист")
+    : undefined;
   const normalizedArtistWorld =
     body.artistWorld
       ? {
           ...body.artistWorld,
+          playlistUrl: normalizedPlaylistUrl !== undefined ? normalizedPlaylistUrl : body.artistWorld.playlistUrl,
           references: body.artistWorld.references?.map((item) => ({
             ...item,
             linkUrl: normalizeOptionalHttpUrl(item.linkUrl, "Референс")
@@ -163,6 +228,10 @@ export const PATCH = withApiHandler(async (request: Request) => {
           projects: body.artistWorld.projects?.map((item) => ({
             ...item,
             linkUrl: normalizeOptionalHttpUrl(item.linkUrl, "Проект")
+          })),
+          visualBoards: body.artistWorld.visualBoards?.map((item) => ({
+            ...item,
+            sourceUrl: normalizeOptionalHttpUrl(item.sourceUrl, `${item.name}: moodboard`)
           }))
         }
       : undefined;
@@ -189,6 +258,7 @@ export const PATCH = withApiHandler(async (request: Request) => {
       ? {
           ...(existing.identityProfile ?? {}),
           ...normalizedArtistWorld,
+          worldCreated: true,
           worldThemePreset: normalizedArtistWorld.themePreset ?? existing.identityProfile?.worldThemePreset ?? undefined,
           worldBackgroundMode:
             normalizedArtistWorld.backgroundMode ?? existing.identityProfile?.worldBackgroundMode ?? undefined,
@@ -245,7 +315,7 @@ export const PATCH = withApiHandler(async (request: Request) => {
     });
 
     if (artistWorld) {
-      const { references, projects, ...identityProfileData } = artistWorld;
+      const { references, projects, visualBoards, ...identityProfileData } = artistWorld;
 
       await tx.artistIdentityProfile.upsert({
         where: { userId: user.id },
@@ -293,35 +363,50 @@ export const PATCH = withApiHandler(async (request: Request) => {
           });
         }
       }
+
+      if (normalizedArtistWorld?.visualBoards) {
+        // Delete all existing board images, then boards, then recreate
+        const existingBoards = await tx.artistWorldVisualBoard.findMany({
+          where: { userId: user.id },
+          select: { id: true }
+        });
+        if (existingBoards.length > 0) {
+          await tx.artistWorldVisualBoardImage.deleteMany({
+            where: { boardId: { in: existingBoards.map((b) => b.id) } }
+          });
+          await tx.artistWorldVisualBoard.deleteMany({ where: { userId: user.id } });
+        }
+
+        for (let boardIndex = 0; boardIndex < visualBoards.length; boardIndex++) {
+          const boardInput = visualBoards[boardIndex];
+          const board = await tx.artistWorldVisualBoard.create({
+            data: {
+              userId: user.id,
+              slug: boardInput.slug,
+              name: boardInput.name,
+              sourceUrl: boardInput.sourceUrl ?? null,
+              sortIndex: boardIndex
+            }
+          });
+
+          if (boardInput.images.length > 0) {
+            await tx.artistWorldVisualBoardImage.createMany({
+              data: boardInput.images.map((img, imgIndex) => ({
+                boardId: board.id,
+                imageUrl: img.imageUrl,
+                sortIndex: imgIndex
+              }))
+            });
+          }
+        }
+      }
     }
 
     return tx.user.findUniqueOrThrow({
       where: { id: user.id },
-      select: {
-        id: true,
-        safeId: true,
-        nickname: true,
-        avatarUrl: true,
-        links: true,
-        notificationsEnabled: true,
-        demosPrivate: true,
-        identityProfile: true,
-        artistWorldProjects: {
-          orderBy: [{ sortIndex: "asc" }, { createdAt: "asc" }]
-        },
-        artistWorldReferences: {
-          orderBy: [{ sortIndex: "asc" }, { createdAt: "asc" }]
-        }
-      }
+      select: profileSelect
     });
   });
 
-  return NextResponse.json({
-    ...updated,
-    artistWorld: serializeArtistWorld({
-      ...(updated.identityProfile ?? {}),
-      references: updated.artistWorldReferences,
-      projects: updated.artistWorldProjects
-    })
-  });
+  return NextResponse.json(buildResponse(updated));
 });

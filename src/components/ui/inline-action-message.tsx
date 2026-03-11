@@ -12,7 +12,7 @@ type InlineActionMessageProps = {
 };
 
 const variantClasses: Record<NonNullable<InlineActionMessageProps["variant"]>, string> = {
-  error: "border-red-500/35 bg-red-500/10 text-red-200",
+  error: "border-[#d88b80] bg-[#f2d7d0] text-[#6f1f17] shadow-[0_8px_20px_rgba(111,31,23,0.08)]",
   success: "border-emerald-300/45 bg-emerald-500/10 text-emerald-800",
   info: "border-brand-border bg-white/70 text-brand-muted"
 };

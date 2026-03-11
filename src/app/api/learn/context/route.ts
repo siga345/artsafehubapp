@@ -9,7 +9,7 @@ import { requireUser } from "@/lib/server-auth";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const surfaceSchema = z.enum(["TODAY", "GOALS", "SONGS"]);
+const surfaceSchema = z.enum(["TODAY", "GOALS"]);
 
 export const GET = withApiHandler(async (request: Request) => {
   const user = await requireUser();
@@ -26,7 +26,6 @@ export const GET = withApiHandler(async (request: Request) => {
   const rawLimit = Number(searchParams.get("limit"));
   const block = await getLearnContextBlock(prisma, user.id, {
     surface: parsedSurface.data,
-    trackId: searchParams.get("trackId")?.trim() || undefined,
     goalId: searchParams.get("goalId")?.trim() || undefined,
     limit: Number.isFinite(rawLimit) ? rawLimit : undefined
   });

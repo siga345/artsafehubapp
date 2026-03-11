@@ -6,7 +6,6 @@ import { Card } from "@/components/ui/card";
 import {
   getLearnMaterialTimeLabel,
   getLearnMaterialTypeLabel,
-  getLearnProgressStatusLabel,
   getLearnProviderLabel,
   supportsInlineEmbed
 } from "@/lib/learn/providers";
@@ -48,11 +47,6 @@ export function LearnMaterialCard({ material, featured = false }: LearnMaterialC
 	            <Badge className="border-white/70 bg-[#2A342C]/90 px-2 py-0.5 text-[10px] text-white md:px-2.5 md:py-1 md:text-xs">
 	              {getLearnProviderLabel(material.provider)}
 	            </Badge>
-              {material.progress.status ? (
-                <Badge className="border-white/70 bg-[#f7fbf2]/95 px-2 py-0.5 text-[10px] text-brand-ink md:px-2.5 md:py-1 md:text-xs">
-                  {getLearnProgressStatusLabel(material.progress.status)}
-                </Badge>
-              ) : null}
 	          </div>
 	        </div>
 

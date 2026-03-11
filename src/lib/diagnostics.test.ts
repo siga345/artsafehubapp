@@ -153,25 +153,52 @@ describe("buildDiagnostics — ARTIST_WORLD", () => {
     expect(world?.state).toBe("MISSING");
   });
 
-  // Thresholds: 0 → MISSING; 1-2 → WEAK; 3-6 (or missing core) → IN_PROGRESS; 7+ with core → STRONG
-  it("returns WEAK when 1-2 identity fields are filled", () => {
-    const profile: ArtistWorldInput = { identityStatement: "I am a pop artist", mission: "Make people dance" };
+  it("returns WEAK when text core is filled only partially", () => {
+    const profile: ArtistWorldInput = {
+      mission: "Make people dance"
+    };
     const result = buildDiagnostics({ ...defaultInput, goal: null, identityProfile: profile });
     const world = result.find((d) => d.factor === "ARTIST_WORLD");
     expect(world?.state).toBe("WEAK");
   });
 
-  it("returns IN_PROGRESS when 3+ fields filled but core fields incomplete", () => {
-    // 4 fields; missing coreThemes and visualDirection → hasCoreFields=false → IN_PROGRESS
+  it("returns IN_PROGRESS when text core is complete but visual boards are empty", () => {
     const profile: ArtistWorldInput = {
-      identityStatement: "I am a pop artist",
-      mission: "Make people dance",
-      philosophy: "Music heals the soul",
-      audienceCore: "Young adults 18-25",
+      identityStatement: "Артист ночной нежности",
+      favoriteArtists: ["A", "B", "C"],
+      lifeValues: "Саморазвитие",
+      mission: "Стать узнаваемым исполнителем",
+      coreThemes: ["Память", "Ночь"]
     };
     const result = buildDiagnostics({ ...defaultInput, goal: null, identityProfile: profile });
     const world = result.find((d) => d.factor === "ARTIST_WORLD");
     expect(world?.state).toBe("IN_PROGRESS");
+  });
+
+  it("returns STRONG when text core is complete and visual boards have a source url", () => {
+    const profile: ArtistWorldInput = {
+      identityStatement: "Артист ночной нежности",
+      favoriteArtists: ["A", "B", "C"],
+      lifeValues: "Саморазвитие",
+      mission: "Стать узнаваемым исполнителем",
+      coreThemes: ["Память", "Ночь"],
+      visualBoards: [
+        {
+          slug: "aesthetics",
+          name: "Эстетика",
+          sourceUrl: "https://www.pinterest.com/artist/aesthetics-board/",
+          images: []
+        },
+        {
+          slug: "fashion",
+          name: "Фэшн",
+          images: []
+        }
+      ]
+    };
+    const result = buildDiagnostics({ ...defaultInput, goal: null, identityProfile: profile });
+    const world = result.find((d) => d.factor === "ARTIST_WORLD");
+    expect(world?.state).toBe("STRONG");
   });
 });
 

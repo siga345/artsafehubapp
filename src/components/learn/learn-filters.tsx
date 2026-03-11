@@ -5,20 +5,15 @@ import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getLearnProgressStatusLabel } from "@/lib/learn/providers";
-import type { LearnProgressStatus } from "@/lib/learn/types";
 import { cn } from "@/lib/utils";
 
 export type LearnCatalogTypeFilter = "ALL" | "VIDEO" | "ARTICLE";
-export type LearnCatalogStatusFilter = "ALL" | LearnProgressStatus;
 
 type LearnFiltersProps = {
   search: string;
   onSearchChange: (value: string) => void;
   selectedType: LearnCatalogTypeFilter;
   onTypeChange: (value: LearnCatalogTypeFilter) => void;
-  selectedStatus: LearnCatalogStatusFilter;
-  onStatusChange: (value: LearnCatalogStatusFilter) => void;
   selectedTag: string | null;
   onTagChange: (value: string | null) => void;
   availableTags: string[];
@@ -33,21 +28,11 @@ const typeOptions: Array<{ value: LearnCatalogTypeFilter; label: string }> = [
   { value: "ARTICLE", label: "Статьи" }
 ];
 
-const statusOptions: Array<{ value: LearnCatalogStatusFilter; label: string }> = [
-  { value: "ALL", label: "Все" },
-  { value: "OPEN", label: getLearnProgressStatusLabel("OPEN") },
-  { value: "APPLIED", label: getLearnProgressStatusLabel("APPLIED") },
-  { value: "NOT_RELEVANT", label: getLearnProgressStatusLabel("NOT_RELEVANT") },
-  { value: "LATER", label: getLearnProgressStatusLabel("LATER") }
-];
-
 export function LearnFilters({
   search,
   onSearchChange,
   selectedType,
   onTypeChange,
-  selectedStatus,
-  onStatusChange,
   selectedTag,
   onTagChange,
   availableTags,
@@ -55,7 +40,7 @@ export function LearnFilters({
   onReset,
   variant = "standalone"
 }: LearnFiltersProps) {
-  const hasActiveFilters = Boolean(search.trim() || selectedType !== "ALL" || selectedStatus !== "ALL" || selectedTag);
+  const hasActiveFilters = Boolean(search.trim() || selectedType !== "ALL" || selectedTag);
   const [showMobileTags, setShowMobileTags] = useState(false);
   const outerClassName =
     variant === "embedded"
@@ -84,6 +69,43 @@ export function LearnFilters({
           />
         </label>
 
+        <div className="md:hidden">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between rounded-xl border border-brand-border bg-[#f7fbf2] px-3 py-2 text-left"
+            onClick={() => setShowMobileTags((prev) => !prev)}
+            aria-expanded={showMobileTags}
+          >
+            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">Tags</span>
+            <span className="inline-flex items-center gap-1 text-xs text-brand-muted">
+              {selectedTag ? `#${selectedTag}` : "все"}
+              {showMobileTags ? <ChevronUp className="h-4 w-4 text-brand-ink" /> : <ChevronDown className="h-4 w-4 text-brand-ink" />}
+            </span>
+          </button>
+        </div>
+
+        <div className={`flex flex-wrap gap-2 ${showMobileTags ? "flex" : "hidden md:flex"}`}>
+          {availableTags.map((tag) => {
+            const active = selectedTag === tag;
+            return (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => onTagChange(active ? null : tag)}
+                className={cn(
+                  "rounded-full border px-2.5 py-1 text-[11px] font-medium tracking-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2A342C] md:px-3 md:py-1.5 md:text-xs",
+                  active
+                    ? "border-[#2A342C] bg-[#2A342C] text-white"
+                    : "border-brand-border bg-white text-brand-muted hover:text-brand-ink"
+                )}
+                aria-pressed={active}
+              >
+                #{tag}
+              </button>
+            );
+          })}
+        </div>
+
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
           <div className="min-w-0 space-y-3">
             <div className="flex flex-wrap gap-2">
@@ -107,28 +129,6 @@ export function LearnFilters({
                 );
               })}
             </div>
-
-            <div className="flex flex-wrap gap-2">
-              {statusOptions.map((option) => {
-                const active = selectedStatus === option.value;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => onStatusChange(option.value)}
-                    className={cn(
-                      "w-fit shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm font-medium tracking-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2A342C] md:px-3 md:py-2",
-                      active
-                        ? "border-[#2A342C] bg-[#2A342C] text-white"
-                        : "border-brand-border bg-white text-brand-ink hover:bg-[#eff4e7]"
-                    )}
-                    aria-pressed={active}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
           </div>
 
           <div className="flex items-center md:justify-end">
@@ -137,43 +137,6 @@ export function LearnFilters({
             </div>
           </div>
         </div>
-      </div>
-
-      <div className="mt-3 md:hidden">
-        <button
-          type="button"
-          className="flex w-full items-center justify-between rounded-xl border border-brand-border bg-[#f7fbf2] px-3 py-2 text-left"
-          onClick={() => setShowMobileTags((prev) => !prev)}
-          aria-expanded={showMobileTags}
-        >
-          <span className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-muted">Tags</span>
-          <span className="inline-flex items-center gap-1 text-xs text-brand-muted">
-            {selectedTag ? `#${selectedTag}` : "все"}
-            {showMobileTags ? <ChevronUp className="h-4 w-4 text-brand-ink" /> : <ChevronDown className="h-4 w-4 text-brand-ink" />}
-          </span>
-        </button>
-      </div>
-
-      <div className={`mt-3 flex flex-wrap gap-2 md:mt-4 ${showMobileTags ? "flex" : "hidden md:flex"}`}>
-        {availableTags.map((tag) => {
-          const active = selectedTag === tag;
-          return (
-            <button
-              key={tag}
-              type="button"
-              onClick={() => onTagChange(active ? null : tag)}
-              className={cn(
-                "rounded-full border px-2.5 py-1 text-[11px] font-medium tracking-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2A342C] md:px-3 md:py-1.5 md:text-xs",
-                active
-                  ? "border-[#2A342C] bg-[#2A342C] text-white"
-                  : "border-brand-border bg-white text-brand-muted hover:text-brand-ink"
-              )}
-              aria-pressed={active}
-            >
-              #{tag}
-            </button>
-          );
-        })}
       </div>
     </section>
   );

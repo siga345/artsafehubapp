@@ -1,86 +1,35 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { ArrowLeft, Clock3, ExternalLink, FileText, Globe, PlayCircle } from "lucide-react";
 
 import { LearnEmbedFrame } from "@/components/learn/learn-embed-frame";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Modal } from "@/components/ui/modal";
-import { Select } from "@/components/ui/select";
-import { apiFetch, apiFetchJson, readApiErrorMessage } from "@/lib/client-fetch";
+import { apiFetch } from "@/lib/client-fetch";
 import {
   getLearnMaterialTimeLabel,
   getLearnMaterialTypeLabel,
-  getLearnProgressStatusLabel,
   getLearnProviderLabel,
   supportsInlineEmbed
 } from "@/lib/learn/providers";
-import type { LearnMaterialDetail, LearnMaterialProgressState } from "@/lib/learn/types";
-import { useToast } from "@/components/ui/toast";
+import type { LearnMaterialDetail } from "@/lib/learn/types";
 
 type LearnDetailPageProps = {
   material: LearnMaterialDetail;
 };
 
-type TrackOption = {
-  id: string;
-  title: string;
-};
-
-type GoalOption = {
-  id: string;
-  title: string;
-  status: string;
-};
-
-type GoalListResponse = {
-  items: GoalOption[];
-};
-
-async function fetchTrackOptions() {
-  const tracks = await apiFetchJson<Array<{ id: string; title: string }>>("/api/songs");
-  return tracks.map((track) => ({ id: track.id, title: track.title }));
-}
-
-async function fetchGoalOptions() {
-  const goals = await apiFetchJson<GoalListResponse>("/api/goals");
-  return goals.items.filter((goal) => goal.status === "ACTIVE").map((goal) => ({ id: goal.id, title: goal.title, status: goal.status }));
-}
-
 export function LearnDetailPage({ material }: LearnDetailPageProps) {
-  const toast = useToast();
   const timeLabel = getLearnMaterialTimeLabel(material);
   const canEmbed = supportsInlineEmbed(material);
   const isVideo = material.type === "VIDEO";
   const isArticle = material.type === "ARTICLE";
-  const [progress, setProgress] = useState<LearnMaterialProgressState>(material.progress);
-  const [isApplyTrackOpen, setIsApplyTrackOpen] = useState(false);
-  const [isApplyGoalOpen, setIsApplyGoalOpen] = useState(false);
-  const [selectedTrackId, setSelectedTrackId] = useState("");
-  const [selectedGoalId, setSelectedGoalId] = useState("");
-  const [savingAction, setSavingAction] = useState("");
-
-  const tracksQuery = useQuery({
-    queryKey: ["learn-apply-tracks"],
-    queryFn: fetchTrackOptions,
-    enabled: isApplyTrackOpen
-  });
-  const goalsQuery = useQuery({
-    queryKey: ["learn-apply-goals"],
-    queryFn: fetchGoalOptions,
-    enabled: isApplyGoalOpen
-  });
 
   useEffect(() => {
-    let cancelled = false;
-
     async function markOpen() {
       try {
-        const response = await apiFetch(`/api/learn/materials/${material.slug}/progress`, {
+        await apiFetch(`/api/learn/materials/${material.slug}/progress`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -88,72 +37,13 @@ export function LearnDetailPage({ material }: LearnDetailPageProps) {
             surface: "LEARN"
           })
         });
-        if (!response.ok) return;
-        const payload = (await response.json()) as { progress: LearnMaterialProgressState };
-        if (!cancelled) {
-          setProgress(payload.progress);
-        }
       } catch {
         // ignore non-blocking open tracking errors
       }
     }
 
     void markOpen();
-    return () => {
-      cancelled = true;
-    };
   }, [material.slug]);
-
-  useEffect(() => {
-    if (tracksQuery.data?.length && !selectedTrackId) {
-      setSelectedTrackId(tracksQuery.data[0].id);
-    }
-  }, [selectedTrackId, tracksQuery.data]);
-
-  useEffect(() => {
-    if (goalsQuery.data?.length && !selectedGoalId) {
-      setSelectedGoalId(goalsQuery.data[0].id);
-    }
-  }, [selectedGoalId, goalsQuery.data]);
-
-  const appliedTargetLabel = useMemo(() => {
-    if (!progress.appliedTarget) return null;
-    return progress.appliedTarget.type === "TRACK"
-      ? `Применено к треку: ${progress.appliedTarget.title}`
-      : `Применено к цели: ${progress.appliedTarget.title}`;
-  }, [progress.appliedTarget]);
-
-  async function submitProgressAction(
-    body:
-      | { action: "LATER" | "NOT_RELEVANT"; surface: "LEARN" }
-      | { action: "APPLY"; surface: "LEARN"; targetType: "TRACK" | "GOAL"; targetId: string }
-  ) {
-    setSavingAction(body.action);
-    try {
-      const response = await apiFetch(`/api/learn/materials/${material.slug}/progress`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      if (!response.ok) {
-        throw new Error(await readApiErrorMessage(response, "Не удалось обновить статус материала."));
-      }
-      const payload = (await response.json()) as { progress: LearnMaterialProgressState };
-      setProgress(payload.progress);
-
-      if (body.action === "APPLY") {
-        toast.success(body.targetType === "TRACK" ? "Материал привязан к треку." : "Материал привязан к цели.");
-      } else if (body.action === "LATER") {
-        toast.info("Материал отложен на потом.");
-      } else {
-        toast.info("Материал помечен как неактуальный.");
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Не удалось обновить статус материала.");
-    } finally {
-      setSavingAction("");
-    }
-  }
 
   return (
     <div className="space-y-6 pb-8">
@@ -189,9 +79,6 @@ export function LearnDetailPage({ material }: LearnDetailPageProps) {
                   {timeLabel}
                 </Badge>
               ) : null}
-              {progress.status ? (
-                <Badge className="border-brand-border bg-white/90 text-brand-ink">{getLearnProgressStatusLabel(progress.status)}</Badge>
-              ) : null}
             </div>
 
             <div>
@@ -212,10 +99,6 @@ export function LearnDetailPage({ material }: LearnDetailPageProps) {
                 </span>
               ))}
             </div>
-
-            {appliedTargetLabel ? (
-              <div className="rounded-2xl border border-brand-border bg-white/85 p-3 text-sm text-brand-ink">{appliedTargetLabel}</div>
-            ) : null}
           </div>
 
           <div className="overflow-hidden rounded-3xl border border-brand-border bg-white/75 shadow-sm">
@@ -310,40 +193,6 @@ export function LearnDetailPage({ material }: LearnDetailPageProps) {
         <aside className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Workflow actions</CardTitle>
-              <CardDescription>Материал можно не только открыть, но и привязать к текущей работе.</CardDescription>
-            </CardHeader>
-            <div className="space-y-3 px-6 pb-6">
-              {appliedTargetLabel ? (
-                <div className="rounded-2xl border border-brand-border bg-[#f7fbf2] p-3 text-sm text-brand-ink">{appliedTargetLabel}</div>
-              ) : null}
-              <Button className="w-full justify-center" onClick={() => setIsApplyTrackOpen(true)}>
-                Применить к треку
-              </Button>
-              <Button variant="secondary" className="w-full justify-center" onClick={() => setIsApplyGoalOpen(true)}>
-                Применить к цели
-              </Button>
-              <Button
-                variant="secondary"
-                className="w-full justify-center"
-                disabled={savingAction === "LATER"}
-                onClick={() => void submitProgressAction({ action: "LATER", surface: "LEARN" })}
-              >
-                Вернуться позже
-              </Button>
-              <Button
-                variant="ghost"
-                className="w-full justify-center"
-                disabled={savingAction === "NOT_RELEVANT"}
-                onClick={() => void submitProgressAction({ action: "NOT_RELEVANT", surface: "LEARN" })}
-              >
-                Не подошло
-              </Button>
-            </div>
-          </Card>
-
-          <Card>
-            <CardHeader>
               <CardTitle className="text-lg">Метаданные</CardTitle>
               <CardDescription>Базовая информация для каталога и будущего mobile UX.</CardDescription>
             </CardHeader>
@@ -364,12 +213,6 @@ export function LearnDetailPage({ material }: LearnDetailPageProps) {
                 <div className="rounded-2xl border border-brand-border bg-white/70 p-3">
                   <p className="text-xs uppercase tracking-[0.14em] text-brand-muted">Длительность</p>
                   <p className="mt-1 font-medium text-brand-ink">{timeLabel}</p>
-                </div>
-              ) : null}
-              {progress.status ? (
-                <div className="rounded-2xl border border-brand-border bg-white/70 p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-brand-muted">Статус</p>
-                  <p className="mt-1 font-medium text-brand-ink">{getLearnProgressStatusLabel(progress.status)}</p>
                 </div>
               ) : null}
             </div>
@@ -402,92 +245,6 @@ export function LearnDetailPage({ material }: LearnDetailPageProps) {
           </Card>
         </aside>
       </div>
-
-      <Modal
-        open={isApplyTrackOpen}
-        onClose={() => setIsApplyTrackOpen(false)}
-        title="Применить к треку"
-        description="Сохраняем материал как рабочий intent для выбранного трека."
-        actions={[
-          {
-            label: "Отмена",
-            variant: "secondary",
-            onClick: () => setIsApplyTrackOpen(false),
-            disabled: savingAction === "APPLY"
-          },
-          {
-            label: savingAction === "APPLY" ? "Сохраняем..." : "Применить",
-            onClick: async () => {
-              if (!selectedTrackId) return;
-              await submitProgressAction({
-                action: "APPLY",
-                surface: "LEARN",
-                targetType: "TRACK",
-                targetId: selectedTrackId
-              });
-              setIsApplyTrackOpen(false);
-            },
-            disabled: savingAction === "APPLY" || !selectedTrackId
-          }
-        ]}
-      >
-        <div className="space-y-2">
-          <label className="text-xs font-medium uppercase tracking-[0.12em] text-brand-muted">Трек</label>
-          <Select value={selectedTrackId} onChange={(event) => setSelectedTrackId(event.target.value)}>
-            <option value="">Выбери трек</option>
-            {(tracksQuery.data ?? []).map((track) => (
-              <option key={track.id} value={track.id}>
-                {track.title}
-              </option>
-            ))}
-          </Select>
-          {tracksQuery.isLoading ? <p className="text-sm text-brand-muted">Загружаем треки…</p> : null}
-          {tracksQuery.isError ? <p className="text-sm text-[#9b3426]">Не удалось загрузить список треков.</p> : null}
-        </div>
-      </Modal>
-
-      <Modal
-        open={isApplyGoalOpen}
-        onClose={() => setIsApplyGoalOpen(false)}
-        title="Применить к цели"
-        description="Сохраняем материал как рабочую опору для выбранной активной цели."
-        actions={[
-          {
-            label: "Отмена",
-            variant: "secondary",
-            onClick: () => setIsApplyGoalOpen(false),
-            disabled: savingAction === "APPLY"
-          },
-          {
-            label: savingAction === "APPLY" ? "Сохраняем..." : "Применить",
-            onClick: async () => {
-              if (!selectedGoalId) return;
-              await submitProgressAction({
-                action: "APPLY",
-                surface: "LEARN",
-                targetType: "GOAL",
-                targetId: selectedGoalId
-              });
-              setIsApplyGoalOpen(false);
-            },
-            disabled: savingAction === "APPLY" || !selectedGoalId
-          }
-        ]}
-      >
-        <div className="space-y-2">
-          <label className="text-xs font-medium uppercase tracking-[0.12em] text-brand-muted">Цель</label>
-          <Select value={selectedGoalId} onChange={(event) => setSelectedGoalId(event.target.value)}>
-            <option value="">Выбери цель</option>
-            {(goalsQuery.data ?? []).map((goal) => (
-              <option key={goal.id} value={goal.id}>
-                {goal.title}
-              </option>
-            ))}
-          </Select>
-          {goalsQuery.isLoading ? <p className="text-sm text-brand-muted">Загружаем цели…</p> : null}
-          {goalsQuery.isError ? <p className="text-sm text-[#9b3426]">Не удалось загрузить список целей.</p> : null}
-        </div>
-      </Modal>
     </div>
   );
 }

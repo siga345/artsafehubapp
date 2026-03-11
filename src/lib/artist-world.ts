@@ -6,15 +6,12 @@ import {
 // ─── Block IDs ───────────────────────────────────────────────────────────────
 
 export const artistWorldBlockIds = [
-  "hero",
   "mission",
-  "values",
-  "philosophy",
-  "themes",
-  "visual",
-  "audience",
-  "references",
-  "projects"
+  "identity",
+  "themes_audience",
+  "aesthetics",
+  "fashion",
+  "playlist"
 ] as const;
 
 export type ArtistWorldBlockId = (typeof artistWorldBlockIds)[number];
@@ -53,6 +50,21 @@ export type ArtistWorldReferenceInput = {
   imageUrl?: string | null;
 };
 
+export type ArtistWorldVisualBoardInput = {
+  id?: string;
+  slug: string;
+  name: string;
+  sourceUrl?: string | null;
+  images?: Array<{ id?: string; imageUrl: string }>;
+};
+
+export const artistWorldVisualBoardDefinitions = [
+  { slug: "aesthetics", name: "Эстетика" },
+  { slug: "fashion", name: "Фэшн" }
+] as const;
+
+export type ArtistWorldVisualBoardSlug = (typeof artistWorldVisualBoardDefinitions)[number]["slug"];
+
 export type ArtistWorldInput = {
   identityStatement?: string | null;
   mission?: string | null;
@@ -71,8 +83,17 @@ export type ArtistWorldInput = {
   worldBackgroundImageUrl?: string | null;
   worldBlockOrder?: unknown;
   worldHiddenBlocks?: unknown;
+  worldCreated?: boolean;
+  artistName?: string | null;
+  artistAge?: number | null;
+  artistCity?: string | null;
+  favoriteArtists?: string[];
+  lifeValues?: string | null;
+  teamPreference?: string | null;
+  playlistUrl?: string | null;
   references?: ArtistWorldReferenceInput[];
   projects?: ArtistWorldProjectInput[];
+  visualBoards?: ArtistWorldVisualBoardInput[];
 };
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
@@ -171,6 +192,79 @@ function normalizeArtistWorldReference(input: ArtistWorldReferenceInput) {
   };
 }
 
+function isCanonicalVisualBoardSlug(value: string): value is ArtistWorldVisualBoardSlug {
+  return artistWorldVisualBoardDefinitions.some((board) => board.slug === value);
+}
+
+function normalizeVisualBoardImages(images?: Array<{ id?: string; imageUrl: string }>) {
+  if (!Array.isArray(images)) return [];
+
+  return images
+    .map((image) => ({
+      id: trimOrNull(image.id),
+      imageUrl: image.imageUrl.trim()
+    }))
+    .filter((image) => image.imageUrl.length > 0);
+}
+
+export function ensureArtistWorldVisualBoards(
+  boards?: ArtistWorldVisualBoardInput[] | null
+): Array<{
+  id: string | null;
+  slug: ArtistWorldVisualBoardSlug;
+  name: string;
+  sourceUrl: string | null;
+  images: Array<{ id: string | null; imageUrl: string }>;
+}> {
+  const items = Array.isArray(boards) ? boards : [];
+
+  return artistWorldVisualBoardDefinitions.map((definition) => {
+    const existing = items.find((board) => isCanonicalVisualBoardSlug(board.slug) && board.slug === definition.slug);
+
+    return {
+      id: trimOrNull(existing?.id),
+      slug: definition.slug,
+      name: definition.name,
+      sourceUrl: trimOrNull(existing?.sourceUrl),
+      images: normalizeVisualBoardImages(existing?.images)
+    };
+  });
+}
+
+function hasIdentityGroup(input: ArtistWorldInput | null | undefined) {
+  return Boolean(trimOrNull(input?.identityStatement) || trimOrNull(input?.philosophy));
+}
+
+function hasIdentityContextGroup(input: ArtistWorldInput | null | undefined) {
+  return Boolean(trimOrNull(input?.lifeValues) || uniqueStrings(input?.favoriteArtists).length > 0);
+}
+
+function hasThemesAudienceGroup(input: ArtistWorldInput | null | undefined) {
+  return Boolean(
+    uniqueStrings(input?.values).length > 0 ||
+    uniqueStrings(input?.coreThemes).length > 0 ||
+    trimOrNull(input?.audienceCore) ||
+    trimOrNull(input?.differentiator)
+  );
+}
+
+export function countArtistWorldTextCoreAnswers(input: ArtistWorldInput | null | undefined) {
+  const groups = [hasIdentityGroup(input), hasIdentityContextGroup(input), hasThemesAudienceGroup(input)].filter(Boolean).length;
+
+  return (trimOrNull(input?.mission) ? 1 : 0) + groups;
+}
+
+export function hasArtistWorldTextCore(input: ArtistWorldInput | null | undefined) {
+  const missionReady = Boolean(trimOrNull(input?.mission));
+  const supportingGroups = [hasIdentityGroup(input), hasIdentityContextGroup(input), hasThemesAudienceGroup(input)].filter(Boolean).length;
+
+  return missionReady && supportingGroups >= 2;
+}
+
+export function hasArtistWorldVisualContent(input: ArtistWorldInput | null | undefined) {
+  return ensureArtistWorldVisualBoards(input?.visualBoards).some((board) => board.images.length > 0 || Boolean(board.sourceUrl));
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export function normalizeArtistWorldPayload(input: ArtistWorldInput) {
@@ -198,8 +292,17 @@ export function normalizeArtistWorldPayload(input: ArtistWorldInput) {
     worldBackgroundImageUrl: trimOrNull(input.worldBackgroundImageUrl),
     worldBlockOrder: normalizeBlockIds(input.worldBlockOrder),
     worldHiddenBlocks: normalizeHiddenBlockIds(input.worldHiddenBlocks),
+    worldCreated: input.worldCreated ?? false,
+    artistName: trimOrNull(input.artistName),
+    artistAge: typeof input.artistAge === "number" && input.artistAge >= 10 && input.artistAge <= 100 ? input.artistAge : null,
+    artistCity: trimOrNull(input.artistCity),
+    favoriteArtists: uniqueStrings(input.favoriteArtists).slice(0, 3),
+    lifeValues: trimOrNull(input.lifeValues),
+    teamPreference: input.teamPreference && ["solo", "team", "both"].includes(input.teamPreference) ? input.teamPreference : null,
+    playlistUrl: trimOrNull(input.playlistUrl),
     references: Array.isArray(input.references) ? input.references.map(normalizeArtistWorldReference) : [],
-    projects: Array.isArray(input.projects) ? input.projects.map(normalizeArtistWorldProject) : []
+    projects: Array.isArray(input.projects) ? input.projects.map(normalizeArtistWorldProject) : [],
+    visualBoards: ensureArtistWorldVisualBoards(input.visualBoards)
   };
 }
 
@@ -223,8 +326,17 @@ export function serializeArtistWorld(profile: ArtistWorldInput | null) {
     backgroundImageUrl: normalized.worldBackgroundImageUrl,
     blockOrder: normalized.worldBlockOrder,
     hiddenBlocks: normalized.worldHiddenBlocks,
+    worldCreated: normalized.worldCreated,
+    artistName: normalized.artistName,
+    artistAge: normalized.artistAge,
+    artistCity: normalized.artistCity,
+    favoriteArtists: normalized.favoriteArtists,
+    lifeValues: normalized.lifeValues,
+    teamPreference: normalized.teamPreference,
+    playlistUrl: normalized.playlistUrl,
     references: normalized.references,
-    projects: normalized.projects
+    projects: normalized.projects,
+    visualBoards: normalized.visualBoards
   };
 }
 

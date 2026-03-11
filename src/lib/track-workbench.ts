@@ -329,6 +329,7 @@ function buildTrackIdentityBridgePayload(
 
 export function serializeTrackListItem(track: TrackListRecord, options?: TrackSerializationOptions) {
   const canonicalPathStage = track.pathStage ? canonicalizeSongStage(track.pathStage) : null;
+  const isReleaseStage = canonicalPathStage?.order === 7;
   const activeNextStep = track.nextSteps[0] ?? null;
   const releaseDemo = track.demos.find((demo) => demo.versionType === "RELEASE") ?? null;
   const latestDemo = track.demos[0] ?? null;
@@ -364,7 +365,7 @@ export function serializeTrackListItem(track: TrackListRecord, options?: TrackSe
       }
     : null;
   const releaseArchiveMeta =
-    serializedDistributionRequest || serializedReleaseDemo || canonicalPathStage?.name
+    serializedDistributionRequest || serializedReleaseDemo || isReleaseStage
       ? {
           source: serializedDistributionRequest
             ? "distribution_request"

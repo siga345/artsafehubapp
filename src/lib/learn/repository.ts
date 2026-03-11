@@ -15,14 +15,13 @@ import type {
   LearnMaterialListItem,
   LearnMvpMaterialType,
   LearnProblemType,
-  LearnProvider,
-  LearnRecommendedActions
+  LearnProvider
 } from "@/lib/learn/types";
 import type { ArtistGoalType, TrackWorkbenchState } from "@prisma/client";
 
 type DbClient = PrismaClient;
 
-export type LearnMaterialRecord = Omit<LearnMaterialDetail, "progress" | "recommendedActions"> & {
+export type LearnMaterialRecord = Omit<LearnMaterialDetail, "progress"> & {
   workflow: {
     stageOrders: number[];
     goalTypes: ArtistGoalType[];
@@ -30,13 +29,6 @@ export type LearnMaterialRecord = Omit<LearnMaterialDetail, "progress" | "recomm
     problemTypes: LearnProblemType[];
     preferredSurfaces: LearnContextSurface[];
   };
-};
-
-const defaultRecommendedActions: LearnRecommendedActions = {
-  canApplyToTrack: true,
-  canApplyToGoal: true,
-  canSaveForLater: true,
-  canMarkNotRelevant: true
 };
 
 function sortMaterials<T extends { sortOrder: number; title: string }>(items: T[]) {
@@ -175,7 +167,6 @@ export async function getLearnMaterialBySlug(db: DbClient, userId: string, slug:
   const progress = progressMap.get(material.id);
 
   return {
-    ...materialRecordToPublicItem(material, progress ? serializeLearnProgress(progress) : emptyLearnProgressState()),
-    recommendedActions: defaultRecommendedActions
+    ...materialRecordToPublicItem(material, progress ? serializeLearnProgress(progress) : emptyLearnProgressState())
   };
 }

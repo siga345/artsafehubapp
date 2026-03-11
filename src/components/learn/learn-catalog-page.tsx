@@ -7,7 +7,6 @@ import { BookOpen } from "lucide-react";
 import { LearnFeaturedStrip } from "@/components/learn/learn-featured-strip";
 import {
   LearnFilters,
-  type LearnCatalogStatusFilter,
   type LearnCatalogTypeFilter
 } from "@/components/learn/learn-filters";
 import { LearnMaterialCard } from "@/components/learn/learn-material-card";
@@ -23,7 +22,6 @@ async function fetchLearnCatalog() {
 export function LearnCatalogPage() {
   const [search, setSearch] = useState("");
   const [selectedType, setSelectedType] = useState<LearnCatalogTypeFilter>("ALL");
-  const [selectedStatus, setSelectedStatus] = useState<LearnCatalogStatusFilter>("ALL");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
 
@@ -36,11 +34,10 @@ export function LearnCatalogPage() {
   const filterQuery: LearnCatalogQuery = {
     q: deferredSearch.trim() || undefined,
     type: selectedType === "ALL" ? undefined : selectedType,
-    status: selectedStatus === "ALL" ? undefined : selectedStatus,
     tag: selectedTag ?? undefined
   };
   const filteredItems = filterLearnMaterials(allItems, filterQuery);
-  const hasActiveFilters = Boolean(filterQuery.q || filterQuery.type || filterQuery.status || filterQuery.tag);
+  const hasActiveFilters = Boolean(filterQuery.q || filterQuery.type || filterQuery.tag);
 
   const featuredItems = !hasActiveFilters
     ? [...filteredItems].filter((item) => item.isFeatured).slice(0, 4)
@@ -53,7 +50,6 @@ export function LearnCatalogPage() {
   function resetFilters() {
     setSearch("");
     setSelectedType("ALL");
-    setSelectedStatus("ALL");
     setSelectedTag(null);
   }
 
@@ -132,8 +128,6 @@ export function LearnCatalogPage() {
             onSearchChange={setSearch}
             selectedType={selectedType}
             onTypeChange={setSelectedType}
-            selectedStatus={selectedStatus}
-            onStatusChange={setSelectedStatus}
             selectedTag={selectedTag}
             onTagChange={setSelectedTag}
             availableTags={catalogQuery.data?.availableTags ?? []}
@@ -153,7 +147,7 @@ export function LearnCatalogPage() {
             </h2>
             <p className="mt-1 text-xs text-brand-muted md:text-sm">
               {hasActiveFilters
-                ? "Отфильтрованный список по запросу, типу, статусу и тегам."
+                ? "Отфильтрованный список по запросу, типу и тегам."
                 : "Остальной каталог материалов после рекомендованной подборки."}
             </p>
           </div>

@@ -29,11 +29,6 @@ export const GET = withApiHandler(async (request: Request) => {
     tag: searchParams.get("tag")?.trim() || undefined,
     featured: parseFeatured(searchParams.get("featured"))
   };
-  const rawStatus = searchParams.get("status");
-
-  if (rawStatus === "OPEN" || rawStatus === "APPLIED" || rawStatus === "NOT_RELEVANT" || rawStatus === "LATER") {
-    query.status = rawStatus;
-  }
 
   if (rawType === "VIDEO" || rawType === "ARTICLE") {
     query.type = rawType;

@@ -4,15 +4,12 @@ import { Button } from "@/components/ui/button";
 import { artistWorldBlockIds, type ArtistWorldBlockId } from "@/lib/artist-growth";
 
 const blockLabels: Record<ArtistWorldBlockId, string> = {
-  hero: "Hero",
   mission: "Mission",
-  values: "Values",
-  philosophy: "Philosophy",
-  themes: "Themes",
-  visual: "Visual",
-  audience: "Audience",
-  references: "References",
-  projects: "Projects"
+  identity: "Identity",
+  themes_audience: "Themes & Audience",
+  aesthetics: "Aesthetics",
+  fashion: "Fashion",
+  playlist: "Playlist"
 };
 
 export function ArtistWorldBlockManager(props: {

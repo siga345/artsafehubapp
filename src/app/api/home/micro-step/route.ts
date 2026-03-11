@@ -1,7 +1,7 @@
-import { ArtistGoalStatus } from "@prisma/client";
 import { NextResponse } from "next/server";
+import { z } from "zod";
 
-import { apiError, withApiHandler } from "@/lib/api";
+import { apiError, parseJsonBody, withApiHandler } from "@/lib/api";
 import { microStepPromptsByStage } from "@/lib/micro-step-prompts";
 import { canonicalPathStageByOrder, getCanonicalPathStageName } from "@/lib/path-stages";
 import { prisma } from "@/lib/prisma";
@@ -23,6 +23,9 @@ const stagePrompts: Record<string, readonly string[]> = microStepPromptsByStage;
 
 const DAILY_STEPS_PER_STAGE = 5;
 const defaultStageName = canonicalPathStageByOrder[1]?.name ?? "Искра";
+const updateMicroStepSchema = z.object({
+  isCompleted: z.boolean().optional()
+});
 
 const stageOrderByName = Object.entries(canonicalPathStageByOrder).reduce<Record<string, number>>(
   (acc, [order, label]) => {
@@ -208,17 +211,6 @@ function normalizeMicroStepState(microStep: {
 export const POST = withApiHandler(async () => {
   const user = await requireUser();
   const today = toDateOnly(new Date());
-  const activePrimaryGoalCount = await prisma.artistGoal.count({
-    where: {
-      userId: user.id,
-      status: ArtistGoalStatus.ACTIVE,
-      isPrimary: true
-    }
-  });
-
-  if (activePrimaryGoalCount > 0) {
-    throw apiError(409, "Сегодняшний фокус теперь определяется главной целью, а не legacy micro-step.");
-  }
 
   const currentUser = await prisma.user.findUnique({
     where: { id: user.id },
@@ -306,9 +298,10 @@ export const POST = withApiHandler(async () => {
   return NextResponse.json(microStep, { status: 201 });
 });
 
-export const PATCH = withApiHandler(async () => {
+export const PATCH = withApiHandler(async (request: Request) => {
   const user = await requireUser();
   const today = toDateOnly(new Date());
+  const body = await parseJsonBody(request, updateMicroStepSchema).catch(() => ({ isCompleted: true }));
 
   const microStep = await prisma.dailyMicroStep.findUnique({
     where: { userId_date: { userId: user.id, date: today } }
@@ -320,9 +313,12 @@ export const PATCH = withApiHandler(async () => {
 
   const normalized = normalizeMicroStepState(microStep);
   const alreadyCompleted = normalized.completedStepIndexes.includes(normalized.stepCursor);
-  const nextCompletedIndexes = alreadyCompleted
-    ? normalized.completedStepIndexes
-    : [...normalized.completedStepIndexes, normalized.stepCursor].sort((left, right) => left - right);
+  const shouldComplete = body.isCompleted ?? true;
+  const nextCompletedIndexes = shouldComplete
+    ? alreadyCompleted
+      ? normalized.completedStepIndexes
+      : [...normalized.completedStepIndexes, normalized.stepCursor].sort((left, right) => left - right)
+    : normalized.completedStepIndexes.filter((index) => index !== normalized.stepCursor);
 
   const updated = await prisma.dailyMicroStep.update({
     where: { id: microStep.id },
@@ -331,8 +327,8 @@ export const PATCH = withApiHandler(async () => {
       stepPool: normalized.stepPool,
       stepCursor: normalized.stepCursor,
       completedStepIndexes: nextCompletedIndexes,
-      isCompleted: true,
-      completedAt: microStep.completedAt ?? new Date()
+      isCompleted: shouldComplete,
+      completedAt: shouldComplete ? microStep.completedAt ?? new Date() : null
     }
   });
 

@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -18,11 +18,12 @@ import {
 } from "lucide-react";
 
 import { RecommendationCard as SharedRecommendationCard } from "@/components/recommendations/recommendation-card";
+import type { RhythmDto } from "@/contracts/home";
 import type { RecommendationCard as RecommendationCardData } from "@/contracts/recommendations";
+import { usePathOverlay } from "@/components/home/path-overlay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { LearnContextCard, type LearnContextCardAction } from "@/components/learn/learn-context-card";
 import { TodayCoreLoop, type TodayCoreLoopData } from "@/components/home/today-core-loop";
 import { InlineActionMessage } from "@/components/ui/inline-action-message";
 import { Input } from "@/components/ui/input";
@@ -30,9 +31,8 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { apiFetch, apiFetchJson, readApiErrorMessage } from "@/lib/client-fetch";
+import { hasArtistWorldTextCore, hasArtistWorldVisualContent } from "@/lib/artist-growth";
 import type { GoalIdentityBridge, IdentityBridgeStatus, IdentitySupportChip, SoftWarning, TodayContextBridge } from "@/lib/id-integration";
-import { postLearnProgress } from "@/lib/learn/client";
-import type { LearnContextBlock } from "@/lib/learn/types";
 
 type GoalMotionType = "CRAFT" | "CREATIVE";
 type GoalTrajectoryReview = {
@@ -182,7 +182,7 @@ type HomeOverview = {
     mood: "NORMAL" | "TOUGH" | "FLYING";
     note: string | null;
   } | null;
-  weeklyActiveDays: number;
+  rhythm: RhythmDto;
   dayLoop: TodayCoreLoopData;
   commandCenter: {
     position: {
@@ -267,10 +267,6 @@ type HomeOverview = {
     } | null;
     diagnostics: DiagnosticItem[];
   } | null;
-  learn: {
-    today: LearnContextBlock | null;
-    goals: LearnContextBlock | null;
-  };
 };
 
 type DiagnosticItem = {
@@ -285,6 +281,12 @@ type IdProfile = {
   nickname: string;
   avatarUrl: string | null;
   artistWorld: {
+    artistName: string | null;
+    artistAge: number | null;
+    artistCity: string | null;
+    favoriteArtists: string[];
+    lifeValues: string | null;
+    teamPreference: string | null;
     identityStatement: string | null;
     mission: string | null;
     philosophy: string | null;
@@ -294,6 +296,12 @@ type IdProfile = {
     audienceCore: string | null;
     differentiator: string | null;
     fashionSignals: string[];
+    visualBoards: Array<{
+      id: string;
+      slug: string;
+      name: string;
+      images: Array<{ id: string; imageUrl: string }>;
+    }>;
   };
 };
 
@@ -392,14 +400,6 @@ function formatDateLabel(value?: string | null) {
     month: "long",
     year: "numeric"
   });
-}
-
-function getWeeklyRhythmMessage(activeDays: number) {
-  if (activeDays <= 0) return "Ритм пока не собран.";
-  if (activeDays === 1) return "1 активный день за неделю.";
-  if (activeDays <= 3) return `${activeDays} активных дня: темп уже есть, но ещё хрупкий.`;
-  if (activeDays <= 5) return `${activeDays} активных дня: хороший рабочий ритм.`;
-  return `${activeDays} активных дней: система держится.`;
 }
 
 function resolveTaskHref(task: {
@@ -542,6 +542,7 @@ function renderFirstWarning(warnings: SoftWarning[] | undefined) {
 
 export function CommandCenterPage() {
   const toast = useToast();
+  const { openPathOverlay } = usePathOverlay();
   const [goalForm, setGoalForm] = useState<CreateGoalState>({
     type: "ALBUM_RELEASE",
     title: "",
@@ -556,7 +557,6 @@ export function CommandCenterPage() {
   const [taskLinkOpenById, setTaskLinkOpenById] = useState<Record<string, boolean>>({});
   const [taskLinkDraftById, setTaskLinkDraftById] = useState<Record<string, TaskLinkState>>({});
   const [actionError, setActionError] = useState("");
-
 
   const {
     data,
@@ -598,48 +598,6 @@ export function CommandCenterPage() {
 
   async function refreshAll() {
     await Promise.all([refetchOverview(), refetchGoals(), primaryGoalId ? refetchGoalDetail() : Promise.resolve()]);
-  }
-
-  async function handleLearnAction(materialSlug: string, action: LearnContextCardAction) {
-    setActionError("");
-    try {
-      if (action.kind === "APPLY_TO_TRACK") {
-        await postLearnProgress(materialSlug, {
-          action: "APPLY",
-          surface: "TODAY",
-          targetType: "TRACK",
-          targetId: action.targetId,
-          recommendationContext: action.recommendationContext
-        });
-        toast.success("Материал привязан к треку.");
-      } else if (action.kind === "APPLY_TO_GOAL") {
-        await postLearnProgress(materialSlug, {
-          action: "APPLY",
-          surface: "GOALS",
-          targetType: "GOAL",
-          targetId: action.targetId,
-          recommendationContext: action.recommendationContext
-        });
-        toast.success("Материал привязан к цели.");
-      } else if (action.kind === "NOT_RELEVANT") {
-        await postLearnProgress(materialSlug, {
-          action: "NOT_RELEVANT",
-          surface: "TODAY",
-          recommendationContext: action.recommendationContext
-        });
-        toast.info("Материал скрыт из рекомендаций.");
-      } else {
-        await postLearnProgress(materialSlug, {
-          action: "LATER",
-          surface: "TODAY",
-          recommendationContext: action.recommendationContext
-        });
-        toast.info("Материал отложен на потом.");
-      }
-      await refreshAll();
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Не удалось обновить Learn-материал.");
-    }
   }
 
   async function createGoal() {
@@ -894,10 +852,9 @@ export function CommandCenterPage() {
     ? `${primaryGoal.typeLabel} • дедлайн ${formatDateLabel(primaryGoal.targetDate)}`
     : "Сначала нужна одна главная цель, чтобы система могла собрать осмысленный фокус дня.";
   const artistWorldFilled = Boolean(
-    idProfile?.artistWorld.identityStatement ||
-      idProfile?.artistWorld.mission ||
-      idProfile?.artistWorld.coreThemes.length ||
-      idProfile?.artistWorld.visualDirection
+    idProfile &&
+      hasArtistWorldTextCore(idProfile.artistWorld) &&
+      hasArtistWorldVisualContent(idProfile.artistWorld)
   );
 
   return (
@@ -916,9 +873,13 @@ export function CommandCenterPage() {
                 {artistName}
               </p>
 
-              <div className="mt-4 rounded-full border border-white/18 bg-white/10 px-5 py-2.5 text-sm font-medium text-white/92 backdrop-blur-md">
+              <button
+                type="button"
+                onClick={openPathOverlay}
+                className="mt-4 rounded-full border border-white/18 bg-white/10 px-5 py-2.5 text-sm font-medium text-white/92 backdrop-blur-md transition-colors hover:bg-white/20"
+              >
                 PATH этап: {data.stage.order}. {data.stage.name}
-              </div>
+              </button>
 
               <p className="mt-3 max-w-xl text-sm text-white/76 md:text-base">{artistIdentity}</p>
             </div>
@@ -1006,13 +967,6 @@ export function CommandCenterPage() {
 	                  : null}
 	              </div>
 
-              <LearnContextCard
-                block={data.learn.goals}
-                compact
-                targetLabelOverride={primaryGoal.title}
-                onAction={handleLearnAction}
-              />
-
 	              <div className="grid gap-3 sm:grid-cols-2">
                 {primaryGoal.pillars.map((pillar) => (
                   <div key={pillar.id} className="rounded-2xl border border-brand-border bg-white/80 p-4">
@@ -1044,10 +998,21 @@ export function CommandCenterPage() {
                 <CardDescription>{data.stage.description}</CardDescription>
               </CardHeader>
 
-              <div className="rounded-2xl border border-brand-border bg-white/80 p-4">
-                <p className="text-xs uppercase tracking-[0.14em] text-brand-muted">Ритм недели</p>
-                <p className="mt-2 text-sm font-medium text-brand-ink">{data.weeklyActiveDays} / 7 активных дней</p>
-                <p className="mt-1 text-sm text-brand-muted">{getWeeklyRhythmMessage(data.weeklyActiveDays)}</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl border border-brand-border bg-white/80 p-4">
+                  <p className="text-xs uppercase tracking-[0.14em] text-brand-muted">Ритм недели</p>
+                  <p className="mt-2 text-sm font-medium text-brand-ink">{data.rhythm.score.toFixed(1)} / 7</p>
+                  <p className="mt-1 text-sm text-brand-muted">{data.rhythm.message}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={openPathOverlay}
+                  className="rounded-2xl border border-brand-border bg-white/80 p-4 text-left transition hover:bg-[#f7fbf2]"
+                >
+                  <p className="text-xs uppercase tracking-[0.14em] text-brand-muted">Подробный PATH</p>
+                  <p className="mt-2 text-sm font-medium text-brand-ink">Открыть экран пути</p>
+                  <p className="mt-1 text-sm text-brand-muted">Детальный экран с этапом, ритмом и микро-шагом.</p>
+                </button>
               </div>
 
               {biggestRisk ? (
@@ -1241,13 +1206,6 @@ export function CommandCenterPage() {
               </div>
 
               <SharedRecommendationCard recommendation={todayFocus.recommendation} />
-
-              <LearnContextCard
-                block={data.learn.today}
-                compact
-                targetLabelOverride={todayFocus.task.linkedTrack?.title ?? todayFocus.goal.title}
-                onAction={handleLearnAction}
-              />
 
 	              <div className="flex flex-wrap gap-3">
                 <Button

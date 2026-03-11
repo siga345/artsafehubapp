@@ -8,7 +8,7 @@ import { requireUser } from "@/lib/server-auth";
 const MAX_WORLD_ASSET_UPLOAD_BYTES = 8 * 1024 * 1024;
 const ALLOWED_WORLD_ASSET_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
-const uploadKindSchema = z.enum(["background", "project_cover", "reference_image"]);
+const uploadKindSchema = z.enum(["background", "project_cover", "reference_image", "board_image"]);
 
 export const POST = withApiHandler(async (request: Request) => {
   await requireUser();

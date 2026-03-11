@@ -15,7 +15,6 @@ export function filterLearnMaterials(items: LearnMaterialListItem[], query: Lear
   return items.filter((item) => {
     if (query.type && item.type !== query.type) return false;
     if (typeof query.featured === "boolean" && item.isFeatured !== query.featured) return false;
-    if (query.status && item.progress.status !== query.status) return false;
 
     if (normalizedTag) {
       const hasTag = item.tags.some((tag) => normalizeValue(tag) === normalizedTag);

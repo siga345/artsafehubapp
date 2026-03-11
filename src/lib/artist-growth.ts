@@ -12,7 +12,7 @@
  * tie together templates + DB writes, and re-exports everything else.
  */
 
-import { ArtistGoalStatus, Prisma, PrismaClient } from "@prisma/client";
+import { ArtistGoalStatus, ExecutionTemplate, Prisma, PrismaClient } from "@prisma/client";
 import { trimOrNull, goalDetailInclude } from "./goals/types";
 import { getGoalBlueprint, computeDueDate } from "./goals/templates";
 import type { ArtistWorldInput } from "./artist-world";
@@ -43,10 +43,12 @@ export {
 export type { GoalTemplateInput } from "./goals/templates";
 export {
   artistGoalTypeLabels,
+  executionTemplateLabels,
   goalFactorLabels,
   goalMotionTypeLabels,
   goalFactorDefaultMotionTypes,
   goalFactorsByType,
+  getGoalTypeForExecutionTemplate,
   computeDueDate,
   getGoalBlueprint
 } from "./goals/templates";
@@ -95,14 +97,21 @@ export type {
   ArtistWorldBlockId,
   ArtistWorldProjectInput,
   ArtistWorldReferenceInput,
+  ArtistWorldVisualBoardSlug,
+  ArtistWorldVisualBoardInput,
   ArtistWorldInput
 } from "./artist-world";
 
 export {
   artistWorldBlockIds,
+  artistWorldVisualBoardDefinitions,
   defaultArtistWorldBlockOrder,
   artistWorldThemePresetOptions,
   artistWorldBackgroundModeOptions,
+  ensureArtistWorldVisualBoards,
+  countArtistWorldTextCoreAnswers,
+  hasArtistWorldTextCore,
+  hasArtistWorldVisualContent,
   normalizeArtistWorldPayload,
   serializeArtistWorld,
   splitTextareaList
@@ -129,6 +138,7 @@ export async function createGoalWithTemplate(
   userId: string,
   input: {
     type: ArtistGoalType;
+    executionTemplate?: ExecutionTemplate | null;
     title: string;
     whyNow?: string | null;
     successDefinition?: string | null;
@@ -147,6 +157,7 @@ export async function createGoalWithTemplate(
     data: {
       userId,
       type: input.type,
+      executionTemplate: input.executionTemplate ?? null,
       title: input.title.trim(),
       whyNow: trimOrNull(input.whyNow),
       successDefinition: trimOrNull(input.successDefinition),
@@ -159,6 +170,7 @@ export async function createGoalWithTemplate(
 
   const blueprint = getGoalBlueprint({
     goalType: input.type,
+    executionTemplate: input.executionTemplate ?? null,
     stageOrder: input.stageOrder,
     title: input.title.trim(),
     mission: input.identityProfile?.mission ?? null,

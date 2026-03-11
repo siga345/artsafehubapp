@@ -53,12 +53,12 @@ const SYSTEM_EVENT_AVATAR = "/images/artsafeplace-logo.jpeg";
 const MAX_FEED_BATCH = 60;
 
 const FRIEND_ACHIEVEMENT_TYPES = [
+  CommunityAchievementType.TRACK_CREATED,
+  CommunityAchievementType.DEMO_UPLOADED,
   CommunityAchievementType.PATH_STAGE_REACHED,
   CommunityAchievementType.RELEASE_READY,
   CommunityAchievementType.TRACK_RETURNED,
-  CommunityAchievementType.DEMO_COMPLETED,
-  CommunityAchievementType.FEEDBACK_REQUESTED,
-  CommunityAchievementType.ARTIST_HELPED
+  CommunityAchievementType.DEMO_COMPLETED
 ] as const;
 
 type CommunityPostMetadata = {
@@ -764,6 +764,16 @@ async function fetchFeedCandidates(
                 role: true,
                 pathStage: { select: { order: true, name: true } }
               }
+            },
+            attendances: {
+              where: { userId: viewerUserId },
+              select: { id: true },
+              take: 1
+            },
+            _count: {
+              select: {
+                attendances: true
+              }
             }
           },
           orderBy: [{ createdAt: "desc" }],
@@ -871,30 +881,15 @@ async function fetchFeedCandidates(
           isOnline: event.isOnline,
           hostLabel: event.hostLabel,
           slug: event.slug,
-          coverImageUrl: event.coverImageUrl ?? null
+          coverImageUrl: event.coverImageUrl ?? null,
+          attendeeCount: event._count.attendances,
+          viewerIsAttending: event.attendances.length > 0
         }
       } satisfies CommunityFeedItemDto;
     })
   ];
 
   return { items };
-}
-
-function extractLikeWhereClausesForProfile(postIds: string[], achievementIds: string[]): Prisma.CommunityLikeWhereInput[] {
-  const likeWhereClauses: Prisma.CommunityLikeWhereInput[] = [];
-  if (postIds.length) {
-    likeWhereClauses.push({
-      targetType: CommunityLikeTargetType.POST,
-      targetId: { in: postIds }
-    });
-  }
-  if (achievementIds.length) {
-    likeWhereClauses.push({
-      targetType: CommunityLikeTargetType.ACHIEVEMENT,
-      targetId: { in: achievementIds }
-    });
-  }
-  return likeWhereClauses;
 }
 
 async function getFeaturedCreatorIds(db: DbClient) {
@@ -1103,10 +1098,11 @@ export async function getCommunityEvents(
   limit: number,
   cursor?: string | null
 ) {
+  const now = new Date();
   const decodedCursor = decodeCursor(cursor);
   const where: Prisma.CommunityEventWhereInput = {
     status: CommunityEventStatus.PUBLISHED,
-    startsAt: { gte: new Date() }
+    startsAt: { gte: now }
   };
 
   if (decodedCursor) {
@@ -1118,6 +1114,18 @@ export async function getCommunityEvents(
 
   const rows = await db.communityEvent.findMany({
     where,
+    include: {
+      attendances: {
+        where: { userId: viewerUserId },
+        select: { id: true },
+        take: 1
+      },
+      _count: {
+        select: {
+          attendances: true
+        }
+      }
+    },
     orderBy: [{ startsAt: "asc" }, { id: "asc" }],
     take: limit + 1
   });
@@ -1142,6 +1150,8 @@ export async function getCommunityEvents(
         isOnline: row.isOnline,
         hostLabel: row.hostLabel,
         coverImageUrl: row.coverImageUrl ?? null,
+        attendeeCount: row._count.attendances,
+        viewerIsAttending: row.attendances.length > 0,
         likeSummary: likeState.likeSummary,
         viewerHasLiked: likeState.viewerHasLiked
       } satisfies CommunityEventCardDto;
@@ -1160,7 +1170,10 @@ export async function getCommunityEvents(
 }
 
 export async function getCommunityOverview(db: DbClient, viewerUserId: string): Promise<CommunityOverviewDto> {
-  const [events, friendsCount, upcomingEventsCount, openFeedbackRequests, feedbackRequestsNeedingYourHelp, receivedHelpfulReplies] =
+  const acceptedFriendIds = await getAcceptedFriendIds(db, viewerUserId);
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const [events, friendsCount, upcomingEventsCount, myEventsCount, friendWinsThisWeek] =
     await Promise.all([
       getCommunityEvents(db, viewerUserId, 4),
       db.friendship.count({
@@ -1175,29 +1188,20 @@ export async function getCommunityOverview(db: DbClient, viewerUserId: string): 
           startsAt: { gte: new Date() }
         }
       }),
-      db.communityFeedbackThread.count({
+      db.communityEventAttendance.count({
         where: {
-          authorUserId: viewerUserId,
-          status: CommunityFeedbackThreadStatus.OPEN
-        }
-      }),
-      db.communityFeedbackThread.count({
-        where: {
-          authorUserId: { not: viewerUserId },
-          status: CommunityFeedbackThreadStatus.OPEN,
-          replies: {
-            none: {
-              authorUserId: viewerUserId
-            }
+          userId: viewerUserId,
+          event: {
+            status: CommunityEventStatus.PUBLISHED,
+            startsAt: { gte: new Date() }
           }
         }
       }),
-      db.communityFeedbackReply.count({
+      db.communityAchievement.count({
         where: {
-          authorUserId: { not: viewerUserId },
-          thread: {
-            authorUserId: viewerUserId
-          }
+          userId: { in: acceptedFriendIds },
+          type: { in: [...FRIEND_ACHIEVEMENT_TYPES] },
+          createdAt: { gte: weekAgo }
         }
       })
     ]);
@@ -1207,11 +1211,102 @@ export async function getCommunityOverview(db: DbClient, viewerUserId: string): 
     counts: {
       friends: friendsCount,
       upcomingEvents: upcomingEventsCount,
-      openFeedbackRequests,
-      feedbackRequestsNeedingYourHelp,
-      receivedHelpfulReplies
+      myEvents: myEventsCount,
+      friendWinsThisWeek
     }
   };
+}
+
+export async function attendCommunityEvent(db: DbClient, viewerUserId: string, eventId: string) {
+  const event = await db.communityEvent.findUnique({
+    where: { id: eventId },
+    select: {
+      id: true,
+      status: true,
+      startsAt: true
+    }
+  });
+
+  if (!event) {
+    throw apiError(404, "Ивент не найден.");
+  }
+
+  if (event.status !== CommunityEventStatus.PUBLISHED || event.startsAt < new Date()) {
+    throw apiError(409, "Запись доступна только на опубликованные будущие ивенты.");
+  }
+
+  await db.communityEventAttendance.upsert({
+    where: {
+      eventId_userId: {
+        eventId,
+        userId: viewerUserId
+      }
+    },
+    create: {
+      eventId,
+      userId: viewerUserId
+    },
+    update: {}
+  });
+
+  return getCommunityEventCard(db, viewerUserId, eventId);
+}
+
+export async function leaveCommunityEvent(db: DbClient, viewerUserId: string, eventId: string) {
+  await db.communityEventAttendance.deleteMany({
+    where: {
+      eventId,
+      userId: viewerUserId
+    }
+  });
+
+  return getCommunityEventCard(db, viewerUserId, eventId);
+}
+
+async function getCommunityEventCard(db: DbClient, viewerUserId: string, eventId: string) {
+  const row = await db.communityEvent.findFirst({
+    where: {
+      id: eventId,
+      status: CommunityEventStatus.PUBLISHED,
+      startsAt: { gte: new Date() }
+    },
+    include: {
+      attendances: {
+        where: { userId: viewerUserId },
+        select: { id: true },
+        take: 1
+      },
+      _count: {
+        select: {
+          attendances: true
+        }
+      }
+    }
+  });
+
+  if (!row) {
+    throw apiError(404, "Ивент не найден.");
+  }
+
+  const likeMap = await getLikeStateMap(db, viewerUserId, [{ targetType: CommunityLikeTargetType.EVENT, targetId: row.id }]);
+  const likeState = toLikeSummary(CommunityLikeTargetType.EVENT, row.id, likeMap);
+
+  return {
+    id: row.id,
+    slug: row.slug,
+    title: row.title,
+    description: row.description,
+    startsAt: row.startsAt.toISOString(),
+    endsAt: row.endsAt ? row.endsAt.toISOString() : null,
+    city: row.city ?? null,
+    isOnline: row.isOnline,
+    hostLabel: row.hostLabel,
+    coverImageUrl: row.coverImageUrl ?? null,
+    attendeeCount: row._count.attendances,
+    viewerIsAttending: row.attendances.length > 0,
+    likeSummary: likeState.likeSummary,
+    viewerHasLiked: likeState.viewerHasLiked
+  } satisfies CommunityEventCardDto;
 }
 
 export async function getCommunityProfile(db: DbClient, viewerUserId: string, safeId: string): Promise<CommunityProfileDto> {
@@ -1254,50 +1349,92 @@ export async function getCommunityProfile(db: DbClient, viewerUserId: string, sa
     throw apiError(404, "Креатор не найден.");
   }
 
-  const [friendRows, statsCounts, activity, derivedFocus, openCommunityFeedbackCount] = await Promise.all([
+  const [friendRows, friendsCount, visibleAchievementRows, visibleAchievementIds, goingEventsCount, derivedFocus] = await Promise.all([
     getFriendshipRows(db, viewerUserId, [profile.id]),
-    Promise.all([
-      db.friendship.count({
-        where: {
-          status: FriendshipStatus.ACCEPTED,
-          OR: [{ requesterUserId: profile.id }, { addresseeUserId: profile.id }]
-        }
-      }),
-      db.communityPost.count({ where: { authorUserId: profile.id } }),
-      db.communityAchievement.count({ where: { userId: profile.id } })
-    ]),
-    fetchFeedCandidates(db, viewerUserId, 12, null, { onlyAuthorUserId: profile.id, kind: "all" }),
-    buildDerivedFocus(db, profile.id),
-    db.communityFeedbackThread.count({
+    db.friendship.count({
       where: {
-        authorUserId: profile.id,
-        status: CommunityFeedbackThreadStatus.OPEN
+        status: FriendshipStatus.ACCEPTED,
+        OR: [{ requesterUserId: profile.id }, { addresseeUserId: profile.id }]
       }
-    })
-  ]);
-
-  const ownActivity = activity.items
-    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
-    .slice(0, 8);
-  const [postIds, achievementIds] = await Promise.all([
-    db.communityPost.findMany({
-      where: { authorUserId: profile.id },
-      select: { id: true }
     }),
     db.communityAchievement.findMany({
-      where: { userId: profile.id },
+      where: {
+        userId: profile.id,
+        type: { in: [...FRIEND_ACHIEVEMENT_TYPES] }
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            safeId: true,
+            nickname: true,
+            avatarUrl: true,
+            role: true,
+            pathStage: { select: { order: true, name: true } }
+          }
+        }
+      },
+      orderBy: [{ createdAt: "desc" }],
+      take: 8
+    }),
+    db.communityAchievement.findMany({
+      where: {
+        userId: profile.id,
+        type: { in: [...FRIEND_ACHIEVEMENT_TYPES] }
+      },
       select: { id: true }
-    })
+    }),
+    db.communityEventAttendance.count({
+      where: {
+        userId: profile.id,
+        event: {
+          status: CommunityEventStatus.PUBLISHED,
+          startsAt: { gte: new Date() }
+        }
+      }
+    }),
+    buildDerivedFocus(db, profile.id),
   ]);
 
-  const likeWhereClauses = extractLikeWhereClausesForProfile(
-    postIds.map((item) => item.id),
-    achievementIds.map((item) => item.id)
+  const likeMap = await getLikeStateMap(
+    db,
+    viewerUserId,
+    visibleAchievementRows.map((achievement) => ({
+      targetType: CommunityLikeTargetType.ACHIEVEMENT,
+      targetId: achievement.id
+    }))
   );
-  const totalLikesReceived = likeWhereClauses.length
+
+  const ownActivity = visibleAchievementRows.map((achievement) => {
+    const likeState = toLikeSummary(CommunityLikeTargetType.ACHIEVEMENT, achievement.id, likeMap);
+    return {
+      id: achievement.id,
+      type: "ACHIEVEMENT",
+      createdAt: achievement.createdAt.toISOString(),
+      author: toActor(achievement.user),
+      isFriendAuthor: achievement.userId !== viewerUserId,
+      likeSummary: likeState.likeSummary,
+      viewerHasLiked: likeState.viewerHasLiked,
+      content: {
+        type: "ACHIEVEMENT",
+        achievementType: achievement.type,
+        title: achievement.title,
+        body: achievement.body,
+        metadata:
+          achievement.metadata && typeof achievement.metadata === "object" && !Array.isArray(achievement.metadata)
+            ? (achievement.metadata as Record<string, unknown>)
+            : null
+      }
+    } satisfies CommunityFeedItemDto;
+  });
+
+  const totalLikesReceived = visibleAchievementIds.length
     ? await db.communityLike.count({
         where: {
-          OR: likeWhereClauses
+          targetType: CommunityLikeTargetType.ACHIEVEMENT,
+          targetId: {
+            in: visibleAchievementIds.map((achievement) => achievement.id)
+          }
         }
       })
     : 0;
@@ -1345,11 +1482,10 @@ export async function getCommunityProfile(db: DbClient, viewerUserId: string, sa
             []
         }
       : null,
-    openCommunityFeedbackCount,
     stats: {
-      friendsCount: statsCounts[0],
-      postsCount: statsCounts[1],
-      achievementsCount: statsCounts[2],
+      friendsCount,
+      achievementsCount: visibleAchievementIds.length,
+      goingEventsCount,
       totalLikesReceived
     },
     recentActivity: ownActivity

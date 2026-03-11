@@ -35,14 +35,14 @@ MVP считается готовым, если артист может:
 - Канонические стадии PATH описаны в `src/lib/path-stages.ts`.
 - Runtime-список микро-шагов хранится в `src/lib/micro-step-prompts.ts`.
 - API выдачи микро-шага: `src/app/api/home/micro-step/route.ts`.
-- Расширенная методичка по микро-шагам: `docs/microsteps.md`.
+- Расширенная методичка по микро-шагам: `docs/microsteps_fixed.md`.
 
-Важно: `docs/microsteps.md` не является прямым source of truth для runtime. Если вы меняете продуктовые микро-шаги, синхронизируйте и код, и методичку.
+Важно: `docs/microsteps_fixed.md` не является прямым source of truth для runtime. Если вы меняете продуктовые микро-шаги, синхронизируйте и код, и методичку.
 
 ## Документация
 
 - Быстрый обзор проекта: `docs/project-study-guide-ru.md`
-- Методичка по микро-шагам PATH: `docs/microsteps.md`
+- Методичка по микро-шагам PATH: `docs/microsteps_fixed.md`
 - Технические контракты post-MVP: `docs/post-mvp-contracts.md`
 
 ## Технологии

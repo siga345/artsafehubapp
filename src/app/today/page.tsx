@@ -1,7 +1,7 @@
 "use client";
 
-import { CommandCenterPage } from "@/components/home/command-center-page";
+import { TodayMinimalPage } from "@/components/home/today-minimal-page";
 
 export default function TodayPage() {
-  return <CommandCenterPage />;
+  return <TodayMinimalPage />;
 }

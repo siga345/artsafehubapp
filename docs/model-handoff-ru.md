@@ -95,15 +95,16 @@ Legacy-названия этапов (`Идея`, `Демо`, `Продакшн`
 
 - текущая PATH-стадия пользователя;
 - daily check-in по настроению;
-- weekly activity / weekly rhythm;
+- rhythm на базе micro-step и daily to-do;
 - onboarding-чеклист;
-- legacy micro-step;
+- micro-step;
+- daily to-do;
 - command center с primary goal, diagnostics и today focus;
 - day loop по трекам: focus -> work -> wrap-up.
 
 Ключевая логика:
 
-- `GET /api/home/overview` собирает единый home payload из check-in, micro-step, weekly activity, onboarding, track/project/request counts и day loop.
+- `GET /api/home/overview` собирает единый home payload из check-in, micro-step, daily to-do, rhythm, onboarding, track/project/request counts и day loop.
 - если включён `NEXT_PUBLIC_COMMAND_CENTER_ENABLED`, overview дополнительно достраивает command center на базе целей, identity profile и daily focus.
 - onboarding-чеклист завязан на фактические действия: профиль, первая песня, первая версия, первая заявка, daily check-in.
 - onboarding показывается только на ранней стадии (`Искра`) и скрывается после dismiss.
@@ -126,9 +127,9 @@ Legacy-названия этапов (`Идея`, `Демо`, `Продакшн`
 - система старается не повторять шаги в пределах текущей недели;
 - при повторном POST курсор двигается к следующему шагу;
 - если stage/pool изменились, пул регенерируется;
-- если включён command center и у пользователя есть активная primary goal, legacy micro-step запрещается и API возвращает `409`, потому что теперь фокус определяется целью.
+- micro-step живёт отдельно от goal-driven today focus и доступен даже при активной primary goal.
 
-Итог: micro-step остаётся как legacy-механика, но продукт смещается в сторону goal-driven today focus.
+Итог: micro-step остаётся отдельным ежедневным импульсом, а goal-driven today focus и daily to-do сосуществуют рядом как самостоятельные слои.
 
 ### 4.3 Goals / Command Center
 
@@ -490,7 +491,7 @@ Legacy-названия этапов (`Идея`, `Демо`, `Продакшн`
 
 - `README.md` описывает старый frozen MVP;
 - `docs/post-mvp-contracts.md` говорит о части вещей как о будущем, хотя runtime уже есть;
-- `docs/microsteps.md` не является прямым source of truth для runtime.
+- `docs/microsteps_fixed.md` не является прямым source of truth для runtime.
 
 ### 8.4 E2E smoke не автономен
 
@@ -592,7 +593,7 @@ Seed создаёт:
 
 - `README.md`
 - `docs/project-study-guide-ru.md`
-- `docs/microsteps.md`
+- `docs/microsteps_fixed.md`
 
 ### 13.2 Источник правды по доменной модели
 

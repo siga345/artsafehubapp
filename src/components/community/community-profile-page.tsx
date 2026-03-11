@@ -3,14 +3,13 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { ArrowLeft, Link2, Sparkles, UsersRound } from "lucide-react";
+import { ArrowLeft, CalendarDays, Link2, Sparkles } from "lucide-react";
 
 import type { ArtistSupportNeedType, CommunityProfileDto } from "@/contracts/community";
 import { FriendshipActions } from "@/components/community/friendship-actions";
 import { LikeToggleButton } from "@/components/community/like-toggle-button";
 import {
   formatCommunityDateTime,
-  renderFeedSubtitle,
   roleLabelByType,
   supportNeedLabelByType
 } from "@/components/community/community-utils";
@@ -136,16 +135,16 @@ export function CommunityProfilePage({ safeId }: { safeId: string }) {
                   <p className="mt-1 text-xl font-semibold text-brand-ink">{profile.stats.friendsCount}</p>
                 </div>
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.14em] text-brand-muted">Посты</p>
-                  <p className="mt-1 text-xl font-semibold text-brand-ink">{profile.stats.postsCount}</p>
-                </div>
-                <div>
                   <p className="text-[11px] uppercase tracking-[0.14em] text-brand-muted">Достижения</p>
                   <p className="mt-1 text-xl font-semibold text-brand-ink">{profile.stats.achievementsCount}</p>
                 </div>
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.14em] text-brand-muted">Открытые запросы</p>
-                  <p className="mt-1 text-xl font-semibold text-brand-ink">{profile.openCommunityFeedbackCount}</p>
+                  <p className="text-[11px] uppercase tracking-[0.14em] text-brand-muted">Ивенты</p>
+                  <p className="mt-1 text-xl font-semibold text-brand-ink">{profile.stats.goingEventsCount}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.14em] text-brand-muted">Реакции</p>
+                  <p className="mt-1 text-xl font-semibold text-brand-ink">{profile.stats.totalLikesReceived}</p>
                 </div>
               </div>
               <FriendshipActions targetUserId={profile.userId} safeId={profile.safeId} friendship={profile.friendship} />
@@ -272,8 +271,8 @@ export function CommunityProfilePage({ safeId }: { safeId: string }) {
 
       <section className="space-y-4">
         <div className="flex items-center gap-2">
-          <UsersRound className="h-4 w-4 text-brand-muted" />
-          <h2 className="text-2xl font-semibold tracking-tight text-brand-ink">Публичная активность</h2>
+          <CalendarDays className="h-4 w-4 text-brand-muted" />
+          <h2 className="text-2xl font-semibold tracking-tight text-brand-ink">Достижения</h2>
         </div>
 
         {profile.recentActivity.length ? (
@@ -282,7 +281,7 @@ export function CommunityProfilePage({ safeId }: { safeId: string }) {
               <Card key={`${item.type}:${item.id}`} className="rounded-[28px] border-brand-border bg-white/90 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold text-brand-ink">{renderFeedSubtitle(item)}</p>
+                    <p className="text-sm font-semibold text-brand-ink">{item.content.type === "ACHIEVEMENT" ? item.content.title : "Достижение"}</p>
                     <p className="mt-1 text-xs text-brand-muted">{formatCommunityDateTime(item.createdAt)}</p>
                   </div>
                   <LikeToggleButton
@@ -294,17 +293,9 @@ export function CommunityProfilePage({ safeId }: { safeId: string }) {
                 </div>
 
                 <div className="mt-3 text-sm leading-6 text-brand-ink">
-                  {item.content.type === "POST" ? item.content.text : null}
                   {item.content.type === "ACHIEVEMENT" ? (
                     <div className="space-y-1">
-                      <p className="font-semibold">{item.content.title}</p>
                       <p className="text-brand-muted">{item.content.body}</p>
-                    </div>
-                  ) : null}
-                  {item.content.type === "EVENT" ? (
-                    <div className="space-y-1">
-                      <p className="font-semibold">{item.content.title}</p>
-                      <p className="text-brand-muted">{item.content.description}</p>
                     </div>
                   ) : null}
                 </div>
@@ -312,7 +303,7 @@ export function CommunityProfilePage({ safeId }: { safeId: string }) {
             ))}
           </div>
         ) : (
-          <Card className="rounded-[28px] p-5 text-sm text-brand-muted">Публичная активность пока не опубликована.</Card>
+          <Card className="rounded-[28px] p-5 text-sm text-brand-muted">Здесь появятся достижения, когда у креатора будут новые milestones.</Card>
         )}
       </section>
 

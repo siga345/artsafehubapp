@@ -1,9 +1,11 @@
 import {
   ArtistGoalStatus,
   DailyFocusSource,
+  ExecutionTemplate,
   GoalMotionType,
   GoalTaskStatus
 } from "@prisma/client";
+import type { RecommendationCard } from "@/contracts/recommendations";
 import {
   buildTrackIdentityBridge,
   buildGoalIdentityBridge,
@@ -24,7 +26,9 @@ import {
 } from "./types";
 import {
   artistGoalTypeLabels,
+  executionTemplateLabels,
   goalFactorLabels,
+  getGoalTypeForExecutionTemplate,
   goalMotionTypeLabels
 } from "./templates";
 import {
@@ -139,6 +143,312 @@ function serializeBalanceSummary(trajectoryReview: GoalTrajectoryReview | null |
   };
 }
 
+type ExecutionGapState = "MISSING" | "WEAK" | "IN_PROGRESS" | "STRONG";
+
+function getExecutionTemplateLabel(template: ExecutionTemplate | null | undefined, goalType: GoalDetailRecord["type"]) {
+  if (template) return executionTemplateLabels[template];
+  return artistGoalTypeLabels[goalType];
+}
+
+function inferLegacyTemplate(goal: GoalDetailRecord): ExecutionTemplate | null {
+  switch (goal.type) {
+    case "ALBUM_RELEASE":
+      return "SINGLE_RELEASE";
+    case "CUSTOM_CAREER":
+      return "CUSTOM_PROJECT";
+    default:
+      return null;
+  }
+}
+
+function getProjectTemplate(goal: GoalDetailRecord) {
+  return goal.executionTemplate ?? inferLegacyTemplate(goal);
+}
+
+function buildZoneSummaries(goal: GoalDetailRecord) {
+  return goal.pillars.map((pillar) => {
+    const tasks = pillar.tasks.map(serializeGoalTask);
+    const openTasks = tasks.filter((task) => task.status !== GoalTaskStatus.DONE);
+    return {
+      id: pillar.id,
+      factor: pillar.factor,
+      factorLabel: goalFactorLabels[pillar.factor],
+      defaultMotionType: pillar.defaultMotionType,
+      defaultMotionTypeLabel: goalMotionTypeLabels[pillar.defaultMotionType],
+      title: pillar.title,
+      purpose: pillar.purpose,
+      sortIndex: pillar.sortIndex,
+      balance: buildPillarBalance(pillar),
+      progress: {
+        doneCount: tasks.filter((task) => task.status === GoalTaskStatus.DONE).length,
+        totalCount: tasks.length
+      },
+      topOpenTasks: openTasks.slice(0, 3),
+      tasks
+    };
+  });
+}
+
+function buildExecutionGapSummary(args: {
+  goal: GoalDetailRecord;
+  identityBridge: GoalIdentityBridge;
+  trajectoryReview: GoalTrajectoryReview | null;
+}): {
+  state: ExecutionGapState;
+  title: string;
+  message: string;
+  recommendation: RecommendationCard;
+} {
+  const { goal, identityBridge, trajectoryReview } = args;
+  const templateLabel = getExecutionTemplateLabel(getProjectTemplate(goal), goal.type);
+  const emptyPillar = goal.pillars.find((pillar) => pillar.tasks.length === 0);
+
+  if (!goal.successDefinition && !goal.targetDate) {
+    const title = "Проект пока без понятной опоры";
+    const message = `У проекта «${goal.title}» ещё нет внятного результата или срока, поэтому его легко бесконечно обсуждать и сложно доводить.`;
+    return {
+      state: "WEAK",
+      title,
+      message,
+      recommendation: buildRecommendationCard({
+        key: `execution-gap:${goal.id}:direction`,
+        surface: "HOME_COMMAND_CENTER",
+        kind: "GOAL_ACTION",
+        source: "SYSTEM",
+        title: "Уточнить рамку проекта",
+        text: message,
+        reason: `${templateLabel} быстрее движется, когда у него есть понятная ближайшая опора.`,
+        primaryAction: {
+          label: "Открыть проект",
+          href: "/today",
+          action: "NAVIGATE"
+        },
+        secondaryActions: [],
+        entityRef: {
+          type: "artist_goal",
+          id: goal.id
+        },
+        futureAiSlotKey: `${goal.id}:direction`
+      })
+    };
+  }
+
+  if (identityBridge.status === "MISSING" || identityBridge.status === "WEAK") {
+    const title = "Проект пока не опирается на мир артиста";
+    const message =
+      identityBridge.warnings[0]?.message ??
+      "Смысл и образ проекта пока недостаточно собраны, поэтому он ощущается как внешний список дел.";
+    return {
+      state: identityBridge.status === "MISSING" ? "MISSING" : "WEAK",
+      title,
+      message,
+      recommendation: buildRecommendationCard({
+        key: `execution-gap:${goal.id}:identity`,
+        surface: "HOME_COMMAND_CENTER",
+        kind: "GOAL_ACTION",
+        source: "SYSTEM",
+        title: "Усилить мир артиста",
+        text: message,
+        reason: "Когда проект опирается на образ и позиционирование, задачи перестают быть механическими.",
+        primaryAction: {
+          label: "Открыть SAFE ID",
+          href: "/id",
+          action: "NAVIGATE"
+        },
+        secondaryActions: [],
+        entityRef: {
+          type: "artist_goal",
+          id: goal.id
+        },
+        futureAiSlotKey: `${goal.id}:identity`
+      })
+    };
+  }
+
+  if (emptyPillar) {
+    const title = `Зона «${emptyPillar.title}» пока пустая`;
+    const message = `В проекте «${goal.title}» ещё не собрана зона «${emptyPillar.title}», поэтому движение получается однобоким.`;
+    return {
+      state: "IN_PROGRESS",
+      title,
+      message,
+      recommendation: buildRecommendationCard({
+        key: `execution-gap:${goal.id}:zone:${emptyPillar.id}`,
+        surface: "HOME_COMMAND_CENTER",
+        kind: "GOAL_ACTION",
+        source: "SYSTEM",
+        title: "Заполнить пустую зону",
+        text: message,
+        reason: "Даже простой проект лучше держится, когда в каждой ключевой плоскости есть хотя бы один рабочий шаг.",
+        primaryAction: {
+          label: "Открыть проект",
+          href: "/today",
+          action: "NAVIGATE"
+        },
+        secondaryActions: [],
+        entityRef: {
+          type: "goal_pillar",
+          id: emptyPillar.id
+        },
+        futureAiSlotKey: `${goal.id}:zone:${emptyPillar.id}`
+      })
+    };
+  }
+
+  if (trajectoryReview && trajectoryReview.overallState !== "HEALTHY") {
+    return {
+      state: trajectoryReview.overallState === "AT_RISK" ? "WEAK" : "IN_PROGRESS",
+      title: "Проект движется с перекосом",
+      message: trajectoryReview.summary,
+      recommendation: trajectoryReview.recommendation
+    };
+  }
+
+  const title = "Проект движется ровно";
+  const message = `У проекта «${goal.title}» уже есть рабочая структура, и сейчас важнее не добавлять сущности, а доводить начатое.`;
+  return {
+    state: "STRONG",
+    title,
+    message,
+    recommendation: buildRecommendationCard({
+      key: `execution-gap:${goal.id}:steady`,
+      surface: "HOME_COMMAND_CENTER",
+      kind: "GOAL_ACTION",
+      source: "SYSTEM",
+      title: "Продолжать текущий темп",
+      text: message,
+      reason: "Сильный execution-layer не требует лишних ритуалов, когда структура уже держится.",
+      primaryAction: {
+        label: "Открыть проект",
+        href: "/today",
+        action: "NAVIGATE"
+      },
+      secondaryActions: [],
+      entityRef: {
+        type: "artist_goal",
+        id: goal.id
+      },
+      futureAiSlotKey: `${goal.id}:steady`
+    })
+  };
+}
+
+function buildExecutionRecommendations(args: {
+  goal: GoalDetailRecord;
+  identityBridge: GoalIdentityBridge;
+  trajectoryReview: GoalTrajectoryReview | null;
+  gapSummary: ReturnType<typeof buildExecutionGapSummary>;
+}) {
+  const { goal, identityBridge, trajectoryReview, gapSummary } = args;
+  const recommendations: RecommendationCard[] = [gapSummary.recommendation];
+  const linkedTrackCount = goal.pillars.flatMap((pillar) => pillar.tasks).filter((task) => Boolean(task.linkedTrackId)).length;
+  const findTask = goal.pillars
+    .flatMap((pillar) => pillar.tasks)
+    .find((task) => task.linkedSpecialistCategory && task.status !== GoalTaskStatus.DONE);
+
+  if ((identityBridge.status === "MISSING" || identityBridge.status === "WEAK") && recommendations.every((item) => item.primaryAction?.href !== "/id")) {
+    recommendations.push(
+      buildRecommendationCard({
+        key: `execution-rec:${goal.id}:id`,
+        surface: "HOME_COMMAND_CENTER",
+        kind: "GOAL_ACTION",
+        source: "SYSTEM",
+        title: "Проверить опору проекта",
+        text: "Когда проект плохо связан с образом артиста, стоит сначала усилить SAFE ID.",
+        reason: "Это помогает собрать смысл проекта и избежать случайных задач.",
+        primaryAction: {
+          label: "Открыть SAFE ID",
+          href: "/id",
+          action: "NAVIGATE"
+        },
+        secondaryActions: [],
+        entityRef: {
+          type: "artist_goal",
+          id: goal.id
+        },
+        futureAiSlotKey: `${goal.id}:id`
+      })
+    );
+  }
+
+  if (linkedTrackCount === 0) {
+    recommendations.push(
+      buildRecommendationCard({
+        key: `execution-rec:${goal.id}:songs`,
+        surface: "HOME_COMMAND_CENTER",
+        kind: "GOAL_ACTION",
+        source: "SYSTEM",
+        title: "Привязать проект к материалу",
+        text: "Проекту нужна хотя бы одна связка с треком или song-project, иначе движение будет слишком абстрактным.",
+        reason: "Даже для немузкальных задач артисту легче двигаться, когда есть реальный материал опоры.",
+        primaryAction: {
+          label: "Открыть Songs",
+          href: "/songs",
+          action: "NAVIGATE"
+        },
+        secondaryActions: [],
+        entityRef: {
+          type: "artist_goal",
+          id: goal.id
+        },
+        futureAiSlotKey: `${goal.id}:songs`
+      })
+    );
+  }
+
+  if (findTask?.linkedSpecialistCategory) {
+    recommendations.push(
+      buildRecommendationCard({
+        key: `execution-rec:${goal.id}:find`,
+        surface: "HOME_COMMAND_CENTER",
+        kind: "GOAL_ACTION",
+        source: "SYSTEM",
+        title: "Открыть поиск под проект",
+        text: `В проекте есть задача, для которой нужен внешний человек: ${findTask.title}.`,
+        reason: "Лучше сразу переводить внешние зависимости в конкретный поиск, а не держать их как мысленный долг.",
+        primaryAction: {
+          label: "Открыть Find",
+          href: `/find?service=${findTask.linkedSpecialistCategory}`,
+          action: "NAVIGATE"
+        },
+        secondaryActions: [],
+        entityRef: {
+          type: "goal_task",
+          id: findTask.id
+        },
+        futureAiSlotKey: `${goal.id}:find`
+      })
+    );
+  } else if (trajectoryReview && trajectoryReview.overallState !== "HEALTHY") {
+    recommendations.push(trajectoryReview.recommendation);
+  } else {
+    recommendations.push(
+      buildRecommendationCard({
+        key: `execution-rec:${goal.id}:learn`,
+        surface: "HOME_COMMAND_CENTER",
+        kind: "GOAL_ACTION",
+        source: "SYSTEM",
+        title: "Посмотреть подборку под проект",
+        text: "Если хочется усилить следующую зону без перегруза, начни с контекстного материала из Learn.",
+        reason: "Обучение в ASP должно помогать прямо в проекте, а не жить отдельно от него.",
+        primaryAction: {
+          label: "Открыть Learn",
+          href: "/learn",
+          action: "NAVIGATE"
+        },
+        secondaryActions: [],
+        entityRef: {
+          type: "artist_goal",
+          id: goal.id
+        },
+        futureAiSlotKey: `${goal.id}:learn`
+      })
+    );
+  }
+
+  return recommendations.slice(0, 3);
+}
+
 function buildSerializedGoalIdentityBridge(goal: GoalDetailRecord, identityProfile?: ArtistWorldInput | null): GoalIdentityBridge {
   return buildGoalIdentityBridge({
     profile: identityProfile ?? null,
@@ -169,10 +479,26 @@ export function serializeGoalDetail(
   const identityBridge = buildSerializedGoalIdentityBridge(goal, identityProfile);
   const trajectoryReview = options?.trajectoryReview ?? null;
   const goalBalance = buildGoalBalance(goal);
+  const projectTemplate = getProjectTemplate(goal);
+  const projectLabel = getExecutionTemplateLabel(projectTemplate, goal.type);
+  const zones = buildZoneSummaries(goal);
+  const gapSummary = buildExecutionGapSummary({
+    goal,
+    identityBridge,
+    trajectoryReview
+  });
+  const recommendations = buildExecutionRecommendations({
+    goal,
+    identityBridge,
+    trajectoryReview,
+    gapSummary
+  });
   return {
     id: goal.id,
     type: goal.type,
     typeLabel: artistGoalTypeLabels[goal.type],
+    executionTemplate: projectTemplate,
+    projectLabel,
     title: goal.title,
     whyNow: goal.whyNow,
     successDefinition: goal.successDefinition,
@@ -193,26 +519,10 @@ export function serializeGoalDetail(
     balanceSummary: serializeBalanceSummary(trajectoryReview),
     balance: goalBalance,
     identityBridge,
-    pillars: goal.pillars.map((pillar) => {
-      const doneCount = pillar.tasks.filter((task) => task.status === GoalTaskStatus.DONE).length;
-      const balance = buildPillarBalance(pillar);
-      return {
-        id: pillar.id,
-        factor: pillar.factor,
-        factorLabel: goalFactorLabels[pillar.factor],
-        defaultMotionType: pillar.defaultMotionType,
-        defaultMotionTypeLabel: goalMotionTypeLabels[pillar.defaultMotionType],
-        title: pillar.title,
-        purpose: pillar.purpose,
-        sortIndex: pillar.sortIndex,
-        balance,
-        progress: {
-          doneCount,
-          totalCount: pillar.tasks.length
-        },
-        tasks: pillar.tasks.map(serializeGoalTask)
-      };
-    })
+    gapSummary,
+    recommendations,
+    zones,
+    pillars: zones.map(({ topOpenTasks: _topOpenTasks, ...zone }) => zone)
   };
 }
 
@@ -241,9 +551,36 @@ export async function getPrimaryGoalDetail(db: DbClient, userId: string) {
 }
 
 export async function getIdentityProfile(db: DbClient, userId: string) {
-  return db.artistIdentityProfile.findUnique({
-    where: { userId }
-  });
+  const [profile, visualBoards] = await Promise.all([
+    db.artistIdentityProfile.findUnique({
+      where: { userId }
+    }),
+    db.artistWorldVisualBoard.findMany({
+      where: { userId },
+      orderBy: [{ sortIndex: "asc" }, { createdAt: "asc" }],
+      include: {
+        images: {
+          orderBy: [{ sortIndex: "asc" }, { createdAt: "asc" }]
+        }
+      }
+    })
+  ]);
+
+  if (!profile && visualBoards.length === 0) return null;
+
+  return {
+    ...(profile ?? {}),
+    visualBoards: visualBoards.map((board) => ({
+      id: board.id,
+      slug: board.slug,
+      name: board.name,
+      sourceUrl: board.sourceUrl,
+      images: board.images.map((image) => ({
+        id: image.id,
+        imageUrl: image.imageUrl
+      }))
+    }))
+  };
 }
 
 // ─── Today focus ─────────────────────────────────────────────────────────────
@@ -465,18 +802,48 @@ export function serializePrimaryGoalSummary(
 
   const identityBridge = buildSerializedGoalIdentityBridge(goal, identityProfile);
   const trajectoryReview = options?.trajectoryReview ?? null;
+  const projectTemplate = getProjectTemplate(goal);
+  const projectLabel = getExecutionTemplateLabel(projectTemplate, goal.type);
+  const gapSummary = buildExecutionGapSummary({
+    goal,
+    identityBridge,
+    trajectoryReview
+  });
+  const recommendations = buildExecutionRecommendations({
+    goal,
+    identityBridge,
+    trajectoryReview,
+    gapSummary
+  });
+
   return {
     id: goal.id,
     title: goal.title,
     type: goal.type,
     typeLabel: artistGoalTypeLabels[goal.type],
+    executionTemplate: projectTemplate,
+    projectLabel,
     status: goal.status,
+    whyNow: goal.whyNow,
     targetDate: goal.targetDate?.toISOString() ?? null,
     successDefinition: goal.successDefinition,
     progress: buildGoalProgress(goal),
     trajectoryReview,
     balanceSummary: serializeBalanceSummary(trajectoryReview),
     identityBridge,
+    gapSummary,
+    recommendations,
+    zones: goal.pillars.map((pillar) => ({
+      id: pillar.id,
+      factor: pillar.factor,
+      title: pillar.title,
+      factorLabel: goalFactorLabels[pillar.factor],
+      defaultMotionType: pillar.defaultMotionType,
+      defaultMotionTypeLabel: goalMotionTypeLabels[pillar.defaultMotionType],
+      balance: buildPillarBalance(pillar),
+      doneCount: pillar.tasks.filter((task) => task.status === GoalTaskStatus.DONE).length,
+      totalCount: pillar.tasks.length
+    })),
     pillars: goal.pillars.map((pillar) => ({
       id: pillar.id,
       factor: pillar.factor,

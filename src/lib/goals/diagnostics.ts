@@ -1,13 +1,18 @@
 import { GoalFactor, GoalTaskStatus, TaskOwnerType } from "@prisma/client";
 import type { RecommendationCard } from "@/contracts/recommendations";
 import type { GoalDetailRecord } from "./types";
-import { trimOrNull, uniqueStrings } from "./types";
+import { trimOrNull } from "./types";
 import {
   buildSystemRecommendation,
   type GoalTrajectoryReview
 } from "./trajectory";
 import { goalFactorsByType } from "./templates";
 import type { ArtistWorldInput } from "@/lib/artist-world";
+import {
+  countArtistWorldTextCoreAnswers,
+  hasArtistWorldTextCore,
+  hasArtistWorldVisualContent
+} from "@/lib/artist-world";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -114,67 +119,53 @@ function buildDirectionDiagnostic(goal: GoalDetailRecord | null): DiagnosticItem
 }
 
 function buildArtistWorldDiagnostic(profile: ArtistWorldInput | null): DiagnosticItem {
-  const completedCount = [
-    trimOrNull(profile?.identityStatement),
-    trimOrNull(profile?.mission),
-    trimOrNull(profile?.philosophy),
-    uniqueStrings(profile?.coreThemes).length ? "themes" : null,
-    uniqueStrings(profile?.aestheticKeywords).length ? "aesthetic" : null,
-    trimOrNull(profile?.visualDirection),
-    trimOrNull(profile?.audienceCore),
-    trimOrNull(profile?.differentiator),
-    uniqueStrings(profile?.fashionSignals).length ? "fashion" : null
-  ].filter(Boolean).length;
+  const textCoreCount = countArtistWorldTextCoreAnswers(profile);
+  const textCoreReady = hasArtistWorldTextCore(profile);
+  const hasVisual = hasArtistWorldVisualContent(profile);
 
-  if (completedCount === 0) {
+  if (textCoreCount === 0) {
     return {
       factor: "ARTIST_WORLD",
       state: "MISSING",
       title: "Мир артиста не собран",
-      message: "Сейчас бренд-ядро пустое, поэтому стратегия и задачи рискуют быть несвязными.",
+      message: "Пока не собрана базовая текстовая основа мира артиста, поэтому стратегия и задачи висят без опоры.",
       recommendation: buildSystemRecommendation({
         key: "home:diagnostic:ARTIST_WORLD",
         kind: "DIAGNOSTIC",
         title: "Заполнить мир артиста",
-        text: "Сейчас бренд-ядро пустое, поэтому стратегия и задачи рискуют быть несвязными.",
+        text: "Пока не собрана базовая текстовая основа мира артиста, поэтому стратегия и задачи висят без опоры.",
         href: "/id"
       })
     };
   }
 
-  if (completedCount <= 2) {
+  if (!textCoreReady) {
     return {
       factor: "ARTIST_WORLD",
       state: "WEAK",
-      title: "Мир артиста держится на двух опорах",
-      message: "Добавь миссию, темы и визуальный язык, чтобы цель не развалилась на случайные действия.",
+      title: "Текстовое ядро мира артиста неполное",
+      message: "Дособери миссию, самоописание и тематическое ядро, чтобы мир артиста начал читаться цельно.",
       recommendation: buildSystemRecommendation({
         key: "home:diagnostic:ARTIST_WORLD",
         kind: "DIAGNOSTIC",
         title: "Дописать профиль",
-        text: "Добавь миссию, темы и визуальный язык, чтобы цель не развалилась на случайные действия.",
+        text: "Дособери миссию, самоописание и тематическое ядро, чтобы мир артиста начал читаться цельно.",
         href: "/id"
       })
     };
   }
 
-  const hasCoreFields =
-    Boolean(trimOrNull(profile?.identityStatement)) &&
-    Boolean(trimOrNull(profile?.mission)) &&
-    uniqueStrings(profile?.coreThemes).length > 0 &&
-    Boolean(trimOrNull(profile?.visualDirection));
-
-  if (!hasCoreFields || completedCount < 7) {
+  if (!hasVisual) {
     return {
       factor: "ARTIST_WORLD",
       state: "IN_PROGRESS",
-      title: "Мир артиста уже читается",
-      message: "Основа собрана, но ещё есть пустоты, из-за которых бренд и стратегия могут расходиться.",
+      title: "Текст собран, но визуал ещё пустой",
+      message: "Базовая история артиста уже есть, но без визуальных референсов мир пока не складывается в цельный образ.",
       recommendation: buildSystemRecommendation({
         key: "home:diagnostic:ARTIST_WORLD",
         kind: "DIAGNOSTIC",
         title: "Усилить мир артиста",
-        text: "Основа собрана, но ещё есть пустоты, из-за которых бренд и стратегия могут расходиться.",
+        text: "Базовая история артиста уже есть, но без визуальных референсов мир пока не складывается в цельный образ.",
         href: "/id"
       })
     };
@@ -184,12 +175,12 @@ function buildArtistWorldDiagnostic(profile: ArtistWorldInput | null): Diagnosti
     factor: "ARTIST_WORLD",
     state: "STRONG",
     title: "Мир артиста оформлен",
-    message: "Идентичность, темы и визуальный язык уже могут работать как фундамент для стратегии.",
+    message: "Текстовая основа и визуальные опоры уже собраны и могут работать как фундамент для стратегии.",
     recommendation: buildSystemRecommendation({
       key: "home:diagnostic:ARTIST_WORLD",
       kind: "DIAGNOSTIC",
       title: "Открыть SAFE ID",
-      text: "Идентичность, темы и визуальный язык уже могут работать как фундамент для стратегии.",
+      text: "Текстовая основа и визуальные опоры уже собраны и могут работать как фундамент для стратегии.",
       href: "/id"
     })
   };

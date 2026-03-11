@@ -6,3 +6,4 @@ export * from "@/contracts/reviews";
 export * from "@/contracts/community";
 export * from "@/contracts/feedback";
 export * from "@/contracts/recommendations";
+export * from "@/contracts/home";

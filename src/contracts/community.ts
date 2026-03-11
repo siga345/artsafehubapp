@@ -201,7 +201,9 @@ export const communityEventContentSchema = z.object({
   isOnline: z.boolean(),
   hostLabel: z.string().min(1),
   slug: z.string().min(1),
-  coverImageUrl: z.string().nullable().optional()
+  coverImageUrl: z.string().nullable().optional(),
+  attendeeCount: z.number().int().nonnegative(),
+  viewerIsAttending: z.boolean()
 });
 export type CommunityEventDto = z.infer<typeof communityEventContentSchema>;
 
@@ -233,6 +235,8 @@ export const communityEventCardSchema = z.object({
   isOnline: z.boolean(),
   hostLabel: z.string().min(1),
   coverImageUrl: z.string().nullable(),
+  attendeeCount: z.number().int().nonnegative(),
+  viewerIsAttending: z.boolean(),
   likeSummary: communityLikeSummarySchema,
   viewerHasLiked: z.boolean()
 });
@@ -278,11 +282,10 @@ export const communityProfileSchema = z.object({
   friendship: friendshipStateSchema,
   supportProfile: communityArtistSupportProfileSchema,
   derivedFocus: communityArtistFocusSchema.nullable(),
-  openCommunityFeedbackCount: z.number().int().nonnegative(),
   stats: z.object({
     friendsCount: z.number().int().nonnegative(),
-    postsCount: z.number().int().nonnegative(),
     achievementsCount: z.number().int().nonnegative(),
+    goingEventsCount: z.number().int().nonnegative(),
     totalLikesReceived: z.number().int().nonnegative()
   }),
   recentActivity: z.array(communityFeedItemSchema)
@@ -294,9 +297,8 @@ export const communityOverviewSchema = z.object({
   counts: z.object({
     friends: z.number().int().nonnegative(),
     upcomingEvents: z.number().int().nonnegative(),
-    openFeedbackRequests: z.number().int().nonnegative(),
-    feedbackRequestsNeedingYourHelp: z.number().int().nonnegative(),
-    receivedHelpfulReplies: z.number().int().nonnegative()
+    myEvents: z.number().int().nonnegative(),
+    friendWinsThisWeek: z.number().int().nonnegative()
   })
 });
 export type CommunityOverviewDto = z.infer<typeof communityOverviewSchema>;

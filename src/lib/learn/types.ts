@@ -7,7 +7,7 @@ export type LearnProvider = "YOUTUBE" | "VIMEO" | "WEB";
 export type LearnProgressStatus = "OPEN" | "APPLIED" | "NOT_RELEVANT" | "LATER";
 export type LearnContextSurface = "LEARN" | "TODAY" | "GOALS" | "SONGS";
 export type LearnApplicationTargetType = "TRACK" | "GOAL";
-export type LearnSurface = Extract<LearnContextSurface, "TODAY" | "GOALS" | "SONGS">;
+export type LearnSurface = Extract<LearnContextSurface, "TODAY" | "GOALS">;
 export type LearnProblemType = "DIRECTION" | "MOMENTUM" | "FEEDBACK" | "RELEASE_PLANNING";
 export type LearnMatchReason = "PATH_STAGE" | "GOAL_TYPE" | "TRACK_STATE" | "PROBLEM_TYPE";
 
@@ -21,13 +21,6 @@ export interface LearnMaterialProgressState {
   status: LearnProgressStatus | null;
   updatedAt: string | null;
   appliedTarget: LearnAppliedTarget;
-}
-
-export interface LearnRecommendedActions {
-  canApplyToTrack: boolean;
-  canApplyToGoal: boolean;
-  canSaveForLater: boolean;
-  canMarkNotRelevant: boolean;
 }
 
 export interface LearnMaterialListItem {
@@ -51,16 +44,13 @@ export interface LearnMaterialListItem {
   progress: LearnMaterialProgressState;
 }
 
-export interface LearnMaterialDetail extends LearnMaterialListItem {
-  recommendedActions: LearnRecommendedActions;
-}
+export type LearnMaterialDetail = LearnMaterialListItem;
 
 export interface LearnCatalogQuery {
   q?: string;
   type?: LearnMvpMaterialType;
   tag?: string;
   featured?: boolean;
-  status?: LearnProgressStatus;
 }
 
 export interface LearnCatalogResponse {

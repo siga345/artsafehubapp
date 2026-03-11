@@ -8,9 +8,9 @@ import {
   type TrackWorkbenchState
 } from "@prisma/client";
 
-import { buildDiagnostics, ensureTodayFocus, getPrimaryGoalDetail, todayToDateOnly } from "@/lib/artist-growth";
+import { buildDiagnostics, ensureTodayFocus, getIdentityProfile, getPrimaryGoalDetail, todayToDateOnly } from "@/lib/artist-growth";
 import { getWeekStart } from "@/lib/artist-growth";
-import { getDayLoopOverview, listActiveWorkshopTracks } from "@/lib/day-loop";
+import { getDayLoopOverview } from "@/lib/day-loop";
 import { feedbackRequestSummarySelect, buildTrackFeedbackSummary } from "@/lib/feedback";
 import { getAllLearnMaterialRecords, type LearnMaterialRecord } from "@/lib/learn/repository";
 import { getLearnMatchReasonLabel } from "@/lib/learn/providers";
@@ -170,14 +170,6 @@ function compareCandidates(left: LearnMaterialCandidate, right: LearnMaterialCan
 }
 
 function resolvePrimaryAction(context: ResolvedLearnContext): LearnContextItem["primaryAction"] {
-  if (context.surface === "SONGS" && context.track) {
-    return {
-      kind: "APPLY_TO_TRACK",
-      targetId: context.track.id,
-      targetLabel: context.track.title
-    };
-  }
-
   if (context.surface === "GOALS" && context.goal) {
     return {
       kind: "APPLY_TO_GOAL",
@@ -350,19 +342,6 @@ async function findTrackContext(db: DbClient, userId: string, trackId: string | 
   };
 }
 
-async function pickSongsAnchorTrackId(db: DbClient, userId: string) {
-  const workshopTracks = await listActiveWorkshopTracks(db, userId);
-  if (workshopTracks[0]?.id) return workshopTracks[0].id;
-
-  const recentTrack = await db.track.findFirst({
-    where: { userId },
-    orderBy: { updatedAt: "desc" },
-    select: { id: true }
-  });
-
-  return recentTrack?.id ?? null;
-}
-
 async function resolveGoalContext(db: DbClient, userId: string, goalId?: string | null): Promise<GoalContextRecord | null> {
   if (goalId) {
     const goal = await db.artistGoal.findFirst({
@@ -447,7 +426,7 @@ async function resolveTodayContext(db: DbClient, userId: string, excludeMaterial
 
   const diagnostics = buildDiagnostics({
     goal: primaryGoal,
-    identityProfile: await db.artistIdentityProfile.findUnique({ where: { userId } }),
+    identityProfile: await getIdentityProfile(db, userId),
     weeklyActiveDays: Math.max(0, Math.min(7, weeklyActivity?.activeDays ?? 0)),
     hasCheckIn: Boolean(checkIn),
     completedFocusCount,
@@ -544,58 +523,6 @@ async function resolveGoalsContext(
   };
 }
 
-async function resolveSongsContext(
-  db: DbClient,
-  userId: string,
-  trackId: string | null | undefined,
-  excludeMaterialIds: Set<string>
-): Promise<ResolvedLearnContext> {
-  const [user, anchorTrackId, primaryGoal] = await Promise.all([
-    db.user.findUnique({
-      where: { id: userId },
-      select: {
-        pathStage: {
-          select: {
-            order: true,
-            name: true
-          }
-        }
-      }
-    }),
-    trackId ? Promise.resolve(trackId) : pickSongsAnchorTrackId(db, userId),
-    resolveGoalContext(db, userId)
-  ]);
-
-  const track = await findTrackContext(db, userId, anchorTrackId);
-  const problemTypes = new Set<LearnProblemType>();
-  addProblemType(
-    problemTypes,
-    "MOMENTUM",
-    Boolean(track && (track.workbenchState === "STUCK" || track.workbenchState === "DEFERRED" || track.workbenchState === "READY_FOR_NEXT_STEP"))
-  );
-  addProblemType(problemTypes, "MOMENTUM", Boolean(track && !track.hasActiveNextStep));
-  addProblemType(problemTypes, "FEEDBACK", Boolean(track && (track.workbenchState === "NEEDS_FEEDBACK" || track.unresolvedFeedbackCount > 0)));
-  addProblemType(
-    problemTypes,
-    "RELEASE_PLANNING",
-    Boolean(primaryGoal?.type === "ALBUM_RELEASE" || (track && track.pathStageOrder !== null && track.pathStageOrder >= 6 && !track.hasDistributionRequest))
-  );
-
-  return {
-    surface: "SONGS",
-    stageOrder: track?.pathStageOrder ?? user?.pathStage?.order ?? 1,
-    stageLabel: user?.pathStage?.name ?? "Искра",
-    goal: primaryGoal,
-    track,
-    problemTypes: [...problemTypes],
-    title: "Learn в рабочем треке",
-    subtitle: track
-      ? `Материалы под текущее состояние трека «${track.title}».`
-      : "Подборка по текущему PATH-этапу, пока рабочий трек ещё не выбран.",
-    excludeMaterialIds
-  };
-}
-
 export async function getLearnContextBlock(
   db: DbClient,
   userId: string,
@@ -617,9 +544,7 @@ export async function getLearnContextBlock(
   const context =
     input.surface === "TODAY"
       ? await resolveTodayContext(db, userId, excludeMaterialIds)
-      : input.surface === "GOALS"
-        ? await resolveGoalsContext(db, userId, input.goalId, excludeMaterialIds)
-        : await resolveSongsContext(db, userId, input.trackId, excludeMaterialIds);
+      : await resolveGoalsContext(db, userId, input.goalId, excludeMaterialIds);
 
   const scored = allMaterials.map((material) => scoreMaterial(material, context, progressMap.get(material.id)))
     .filter((item): item is NonNullable<typeof item> => Boolean(item))

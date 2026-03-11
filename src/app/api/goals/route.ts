@@ -1,10 +1,11 @@
-import { ArtistGoalType, Prisma } from "@prisma/client";
+import { ArtistGoalType, ExecutionTemplate, Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { apiError, parseJsonBody, withApiHandler } from "@/lib/api";
 import {
   createGoalWithTemplate,
+  getGoalTypeForExecutionTemplate,
   getGoalTrajectoryReview,
   getIdentityProfile,
   goalDetailInclude,
@@ -15,7 +16,8 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/server-auth";
 
 const createGoalSchema = z.object({
-  type: z.nativeEnum(ArtistGoalType),
+  type: z.nativeEnum(ArtistGoalType).optional(),
+  executionTemplate: z.nativeEnum(ExecutionTemplate).optional().nullable(),
   title: z.string().trim().min(3).max(140),
   whyNow: z.string().trim().max(500).optional().nullable(),
   successDefinition: z.string().trim().max(500).optional().nullable(),
@@ -67,6 +69,14 @@ export const GET = withApiHandler(async () => {
 export const POST = withApiHandler(async (request: Request) => {
   const user = await requireUser();
   const body = await parseJsonBody(request, createGoalSchema);
+  const goalType =
+    body.type ??
+    (body.executionTemplate ? getGoalTypeForExecutionTemplate(body.executionTemplate) : null);
+
+  if (!goalType) {
+    throw apiError(400, "Нужно передать тип проекта или executionTemplate.");
+  }
+
   const targetDate = parseOptionalDate(body.targetDate);
   const today = todayToDateOnly(new Date());
 
@@ -99,7 +109,8 @@ export const POST = withApiHandler(async (request: Request) => {
     });
 
     return createGoalWithTemplate(tx, user.id, {
-      type: body.type,
+      type: goalType,
+      executionTemplate: body.executionTemplate ?? null,
       title: body.title,
       whyNow: body.whyNow,
       successDefinition: body.successDefinition,

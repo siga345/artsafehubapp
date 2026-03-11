@@ -114,6 +114,13 @@ enum ArtistGoalStatus {
   ARCHIVED
 }
 
+enum ExecutionTemplate {
+  SINGLE_RELEASE
+  ARTIST_PROFILE_REFRESH
+  TEAM_SEARCH
+  CUSTOM_PROJECT
+}
+
 enum GoalFactor {
   DIRECTION
   ARTIST_WORLD
@@ -383,6 +390,7 @@ model User {
   checkIns             DailyCheckIn[]
   weeklyActivities     WeeklyActivity[]
   microSteps           DailyMicroStep[]
+  dailyTodos           DailyTodo[]
   artistRequests       InAppRequest[]     @relation("ArtistRequests")
   specialistRequests   InAppRequest[]     @relation("SpecialistRequests")
   requestActions       InAppRequestAction[]
@@ -390,6 +398,7 @@ model User {
   identityProfile      ArtistIdentityProfile?
   artistWorldProjects  ArtistWorldProject[]
   artistWorldReferences ArtistWorldReference[]
+  artistWorldVisualBoards ArtistWorldVisualBoard[]
   goals                ArtistGoal[]
   dailyFocuses         DailyFocus[]
   trackNextSteps       TrackNextStep[]
@@ -399,6 +408,7 @@ model User {
   communityAchievements CommunityAchievement[]
   communityLikes       CommunityLike[]
   communityEventsCreated CommunityEvent[]      @relation("CommunityEventCreator")
+  communityEventAttendances CommunityEventAttendance[]
   communityFeedbackThreads CommunityFeedbackThread[] @relation("CommunityFeedbackThreadAuthor")
   communityFeedbackReplies CommunityFeedbackReply[] @relation("CommunityFeedbackReplyAuthor")
   featuredCreator      FeaturedCreator?
@@ -787,6 +797,14 @@ model ArtistIdentityProfile {
   worldBackgroundImageUrl String?
   worldBlockOrder       Json?
   worldHiddenBlocks     Json?
+  worldCreated          Boolean                    @default(false)
+  artistName            String?
+  artistAge             Int?
+  artistCity            String?
+  favoriteArtists       String[]                   @default([])
+  lifeValues            String?
+  teamPreference        String?
+  playlistUrl           String?
   createdAt             DateTime                   @default(now())
   updatedAt             DateTime                   @updatedAt
   user                  User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -824,10 +842,38 @@ model ArtistWorldReference {
   @@index([userId, sortIndex])
 }
 
+model ArtistWorldVisualBoard {
+  id        String                      @id @default(cuid())
+  userId    String
+  slug      String
+  name      String
+  sourceUrl String?
+  sortIndex Int                         @default(0)
+  createdAt DateTime                    @default(now())
+  updatedAt DateTime                    @updatedAt
+  user      User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  images    ArtistWorldVisualBoardImage[]
+
+  @@unique([userId, slug])
+  @@index([userId, sortIndex])
+}
+
+model ArtistWorldVisualBoardImage {
+  id        String                 @id @default(cuid())
+  boardId   String
+  imageUrl  String
+  sortIndex Int                    @default(0)
+  createdAt DateTime               @default(now())
+  board     ArtistWorldVisualBoard @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@index([boardId, sortIndex])
+}
+
 model ArtistGoal {
   id                     String           @id @default(cuid())
   userId                 String
   type                   ArtistGoalType
+  executionTemplate      ExecutionTemplate?
   title                  String
   whyNow                 String?
   successDefinition      String?
@@ -847,6 +893,7 @@ model ArtistGoal {
 
   @@index([userId, status, updatedAt])
   @@index([userId, isPrimary])
+  @@index([userId, executionTemplate])
   @@index([createdFromPathStageId])
 }
 
@@ -980,6 +1027,18 @@ model DailyMicroStep {
   completedAt          DateTime?
   user                 User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   pathStage            PathStage? @relation(fields: [pathStageId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, date])
+}
+
+model DailyTodo {
+  id        String   @id @default(cuid())
+  userId    String
+  date      DateTime @db.Date
+  items     Json     @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, date])
 }
@@ -1177,9 +1236,23 @@ model CommunityEvent {
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
   createdByUser   User?                @relation("CommunityEventCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  attendances     CommunityEventAttendance[]
 
   @@index([status, startsAt])
   @@index([createdByUserId, createdAt])
+}
+
+model CommunityEventAttendance {
+  id        String         @id @default(cuid())
+  eventId    String
+  userId     String
+  createdAt DateTime       @default(now())
+  event      CommunityEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([eventId, createdAt])
+  @@index([userId, createdAt])
 }
 
 model CommunityLike {
