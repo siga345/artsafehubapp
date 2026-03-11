@@ -47,7 +47,7 @@ export function PathOverlay({ open, onOpenChange }: PathOverlayProps) {
           className="mx-auto flex min-h-full w-full max-w-[30rem] items-center justify-center sm:max-w-[34rem]"
           onClick={(event) => event.stopPropagation()}
         >
-          <PathPage compact />
+          <PathPage compact onClose={() => onOpenChange(false)} />
         </div>
       </div>
     </OverlayPortal>

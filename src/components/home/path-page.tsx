@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import Image from "next/image";
 import { type ComponentType, useMemo } from "react";
-import { Camera, CircleDot, Clapperboard, Megaphone, Mic, Rocket, SlidersHorizontal, Sparkles, Waves } from "lucide-react";
+import { Camera, CircleDot, Clapperboard, Megaphone, Mic, Rocket, SlidersHorizontal, Sparkles, Waves, X } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
 import { apiFetchJson } from "@/lib/client-fetch";
@@ -81,7 +81,7 @@ function getStageGradientStyle(order?: number) {
   }
 }
 
-export function PathPage({ compact = false }: { compact?: boolean }) {
+export function PathPage({ compact = false, onClose }: { compact?: boolean; onClose?: () => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ["home-overview"],
     queryFn: () => fetcher<HomeOverview>("/api/home/overview")
@@ -91,6 +91,7 @@ export function PathPage({ compact = false }: { compact?: boolean }) {
     const key = data?.stage.iconKey ?? "spark";
     return iconMap[key] ?? Sparkles;
   }, [data?.stage?.iconKey]);
+  const useBrightText = (data?.stage?.order ?? 1) >= 2 && (data?.stage?.order ?? 1) <= 6;
   const isSeventhStage = data?.stage?.order === 7;
   const stageGradientStyle = getStageGradientStyle(data?.stage?.order);
 
@@ -104,6 +105,16 @@ export function PathPage({ compact = false }: { compact?: boolean }) {
           isSeventhStage ? "border-[#7f0000]" : "border-white/60"
         )}
       >
+        {compact && onClose ? (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Закрыть PATH"
+            className="absolute right-4 top-4 z-30 inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/22 bg-black/18 text-white shadow-[0_10px_24px_rgba(0,0,0,0.18)] backdrop-blur-md transition-colors hover:bg-black/28"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        ) : null}
         <div
           aria-hidden
           className={`pointer-events-none absolute inset-0 ${
@@ -147,7 +158,7 @@ export function PathPage({ compact = false }: { compact?: boolean }) {
             <div
               className={cn(
                 "relative z-20 flex h-52 w-52 items-center justify-center md:h-72 md:w-72",
-                compact && "absolute left-1/2 top-1/2 h-80 w-80 -translate-x-1/2 -translate-y-1/2 sm:h-[22rem] sm:w-[22rem]"
+                compact && "absolute left-1/2 top-1/2 h-[24rem] w-[24rem] -translate-x-1/2 -translate-y-1/2 sm:h-[26rem] sm:w-[26rem]"
               )}
             >
               <div aria-hidden className="path-logo-shadow pointer-events-none absolute left-1/2 top-[62%] h-10 w-28 -translate-x-1/2 rounded-full bg-black/12 blur-2xl md:h-12 md:w-36" />
@@ -171,14 +182,24 @@ export function PathPage({ compact = false }: { compact?: boolean }) {
               className={cn(
                 "relative z-20 text-center",
                 compact
-                  ? "absolute inset-x-0 bottom-[16%] mx-auto max-w-[18rem] sm:bottom-[14%] sm:max-w-[21rem]"
+                  ? "absolute inset-x-0 bottom-[9%] mx-auto max-w-[20rem] sm:bottom-[8%] sm:max-w-[22rem]"
                   : "mt-10 max-w-[20rem] md:mt-12 md:max-w-[24rem]"
               )}
             >
-              <p className={`text-[2.05rem] font-semibold leading-none tracking-tight md:text-[3.2rem] ${isSeventhStage ? "text-white" : "text-brand-ink"}`}>
+              <p
+                className={cn(
+                  "text-[2.05rem] font-semibold leading-none tracking-tight md:text-[3.2rem]",
+                  isSeventhStage || useBrightText ? "text-white drop-shadow-[0_10px_30px_rgba(0,0,0,0.28)]" : "text-brand-ink"
+                )}
+              >
                 {isLoading ? "Загрузка..." : data?.stage.name}
               </p>
-              <p className={`mt-3 text-lg leading-tight md:mt-4 md:text-[2rem] ${isSeventhStage ? "text-white/80" : "text-brand-muted"}`}>
+              <p
+                className={cn(
+                  "mt-3 text-lg leading-tight md:mt-4 md:text-[2rem]",
+                  isSeventhStage || useBrightText ? "text-white/78 drop-shadow-[0_8px_24px_rgba(0,0,0,0.22)]" : "text-brand-muted"
+                )}
+              >
                 {data?.stage.description}
               </p>
             </div>
@@ -187,110 +208,13 @@ export function PathPage({ compact = false }: { compact?: boolean }) {
       </Card>
       <style jsx>{`
         .path-logo-float {
-          animation: path-logo-float 5.8s linear infinite;
-          transform-origin: center center;
-          will-change: transform, filter;
           filter: drop-shadow(0 18px 28px rgba(18, 24, 20, 0.08));
         }
 
         .path-logo-shadow {
-          animation: path-logo-shadow 5.8s linear infinite;
-          transform-origin: center center;
-          will-change: transform, opacity, filter;
-        }
-
-        @keyframes path-logo-float {
-          0% {
-            transform: translate3d(0, 0px, 0) rotate(-1.2deg) scale(0.99);
-            filter: drop-shadow(0 18px 28px rgba(18, 24, 20, 0.08));
-          }
-          12.5% {
-            transform: translate3d(0, -2px, 0) rotate(-0.75deg) scale(0.995);
-            filter: drop-shadow(0 20px 31px rgba(18, 24, 20, 0.072));
-          }
-          25% {
-            transform: translate3d(0, -4px, 0) rotate(-0.2deg) scale(1);
-            filter: drop-shadow(0 22px 34px rgba(18, 24, 20, 0.064));
-          }
-          37.5% {
-            transform: translate3d(0, -7px, 0) rotate(0.55deg) scale(1.008);
-            filter: drop-shadow(0 25px 37px rgba(18, 24, 20, 0.052));
-          }
-          50% {
-            transform: translate3d(0, -10px, 0) rotate(1.1deg) scale(1.014);
-            filter: drop-shadow(0 28px 40px rgba(18, 24, 20, 0.04));
-          }
-          62.5% {
-            transform: translate3d(0, -7px, 0) rotate(0.55deg) scale(1.008);
-            filter: drop-shadow(0 25px 37px rgba(18, 24, 20, 0.052));
-          }
-          75% {
-            transform: translate3d(0, -4px, 0) rotate(-0.2deg) scale(1);
-            filter: drop-shadow(0 22px 34px rgba(18, 24, 20, 0.064));
-          }
-          87.5% {
-            transform: translate3d(0, -2px, 0) rotate(-0.75deg) scale(0.995);
-            filter: drop-shadow(0 20px 31px rgba(18, 24, 20, 0.072));
-          }
-          100% {
-            transform: translate3d(0, 0px, 0) rotate(-1.2deg) scale(0.99);
-            filter: drop-shadow(0 18px 28px rgba(18, 24, 20, 0.08));
-          }
-        }
-
-        @keyframes path-logo-shadow {
-          0% {
-            opacity: 0.22;
-            transform: translate3d(-50%, 0, 0) scale(1);
-            filter: blur(18px);
-          }
-          12.5% {
-            opacity: 0.2;
-            transform: translate3d(-50%, 0, 0) scale(0.96);
-            filter: blur(19px);
-          }
-          25% {
-            opacity: 0.18;
-            transform: translate3d(-50%, 0, 0) scale(0.92);
-            filter: blur(20px);
-          }
-          37.5% {
-            opacity: 0.145;
-            transform: translate3d(-50%, 0, 0) scale(0.87);
-            filter: blur(21px);
-          }
-          50% {
-            opacity: 0.12;
-            transform: translate3d(-50%, 0, 0) scale(0.82);
-            filter: blur(22px);
-          }
-          62.5% {
-            opacity: 0.145;
-            transform: translate3d(-50%, 0, 0) scale(0.87);
-            filter: blur(21px);
-          }
-          75% {
-            opacity: 0.18;
-            transform: translate3d(-50%, 0, 0) scale(0.92);
-            filter: blur(20px);
-          }
-          87.5% {
-            opacity: 0.2;
-            transform: translate3d(-50%, 0, 0) scale(0.96);
-            filter: blur(19px);
-          }
-          100% {
-            opacity: 0.22;
-            transform: translate3d(-50%, 0, 0) scale(1);
-            filter: blur(18px);
-          }
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-          .path-logo-float,
-          .path-logo-shadow {
-            animation: none;
-          }
+          opacity: 0.18;
+          transform: translate3d(-50%, 0, 0) scale(0.92);
+          filter: blur(20px);
         }
       `}</style>
     </div>
